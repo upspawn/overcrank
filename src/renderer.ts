@@ -1,9 +1,11 @@
 /**
- * Core renderer — advance virtual time + capture CDP screenshots.
+ * Core renderer — advance virtual time + capture screenshots.
  *
- * The page MUST have the virtual clock script injected before navigation.
- * This module doesn't know about ffmpeg, encoding, or rrweb — it just
- * controls time and captures frames.
+ * Two capture backends:
+ * - CDP: Page.captureScreenshot (works everywhere, ~33ms/frame)
+ * - beginFrame: HeadlessExperimental.beginFrame (Linux chrome-headless-shell, ~13ms/frame)
+ *
+ * The renderer auto-detects beginFrame support and uses it when available.
  */
 
 import type { CDPPage, CDPSession, Frame, FrameFormat, FrameHandler } from './types'
@@ -27,16 +29,9 @@ async function openCDPSession(page: CDPPage): Promise<CDPSession> {
 /**
  * Renderer — controls virtual time and captures screenshots from a browser page.
  *
- * ```ts
- * const renderer = await Renderer.create(page)
- * renderer.setFormat('png').setQuality(90)
- *
- * await renderer.advance(1000)
- * const frame = await renderer.capture()
- *
- * console.log(renderer.frameCount)  // 1
- * console.log(renderer.elapsedMs)   // 1000
- * ```
+ * Auto-detects `HeadlessExperimental.beginFrame` support (Linux chrome-headless-shell).
+ * When available, capture is ~2x faster (composite + screenshot in one CDP call).
+ * Falls back to `Page.captureScreenshot` on macOS or regular Chrome.
  */
 export class Renderer {
   private page: CDPPage
@@ -46,6 +41,8 @@ export class Renderer {
   private _elapsedMs = 0
   private _quality = 80
   private _format: FrameFormat = 'jpeg'
+  private _useBeginFrame = false
+  private _frameTimeTicks = 0
 
   private constructor(page: CDPPage, cdp: CDPSession) {
     this.page = page
@@ -55,7 +52,23 @@ export class Renderer {
   /** Create a renderer attached to a Playwright or Puppeteer page. */
   static async create(page: CDPPage): Promise<Renderer> {
     const cdp = await openCDPSession(page)
-    return new Renderer(page, cdp)
+    const renderer = new Renderer(page, cdp)
+    await renderer._detectBeginFrame()
+    return renderer
+  }
+
+  /** Probe whether beginFrame is available. */
+  private async _detectBeginFrame(): Promise<void> {
+    try {
+      this._frameTimeTicks = Date.now() * 1000
+      await this.cdp.send('HeadlessExperimental.beginFrame', {
+        frameTimeTicks: this._frameTimeTicks,
+      })
+      this._frameTimeTicks += 16000
+      this._useBeginFrame = true
+    } catch {
+      this._useBeginFrame = false
+    }
   }
 
   // --- Config (chainable) ---
@@ -84,13 +97,17 @@ export class Renderer {
     return this._elapsedMs
   }
 
+  /** Whether the fast beginFrame backend is active. */
+  get usesBeginFrame(): boolean {
+    return this._useBeginFrame
+  }
+
   // --- Actions ---
 
   /**
    * Advance virtual time by the given number of milliseconds.
    * Steps in ~16ms increments (matching browser's native 60fps RAF rate)
    * so accumulated animations (trails, physics) render correctly.
-   * The stepping happens inside the browser in a single evaluate call.
    */
   async advance(ms: number): Promise<void> {
     await this.page.evaluate(
@@ -109,16 +126,26 @@ export class Renderer {
 
   /** Capture a screenshot at the current virtual time. */
   async capture(): Promise<Frame> {
-    const params: Record<string, unknown> = {
-      format: this._format,
-      optimizeForSpeed: true,
-    }
-    if (this._format === 'jpeg') {
-      params.quality = this._quality
+    let buffer: Buffer
+
+    if (this._useBeginFrame) {
+      // beginFrame: force composite + screenshot in one CDP call (~13ms)
+      this._frameTimeTicks += 16000
+      const result = await this.cdp.send('HeadlessExperimental.beginFrame', {
+        frameTimeTicks: this._frameTimeTicks,
+        screenshot: { format: this._format, quality: this._quality },
+      })
+      if (result.screenshotData) {
+        buffer = Buffer.from(result.screenshotData as string, 'base64')
+      } else {
+        // No visual change — force a regular screenshot as fallback
+        buffer = await this._cdpScreenshot()
+      }
+    } else {
+      // CDP: Page.captureScreenshot (~33ms)
+      buffer = await this._cdpScreenshot()
     }
 
-    const { data } = await this.cdp.send('Page.captureScreenshot', params)
-    const buffer = Buffer.from(data as string, 'base64')
     const timestamp = await this.page.evaluate(
       () => (window as any).__virtualTime.now(),
     )
@@ -133,6 +160,18 @@ export class Renderer {
     }
 
     return frame
+  }
+
+  private async _cdpScreenshot(): Promise<Buffer> {
+    const params: Record<string, unknown> = {
+      format: this._format,
+      optimizeForSpeed: true,
+    }
+    if (this._format === 'jpeg') {
+      params.quality = this._quality
+    }
+    const { data } = await this.cdp.send('Page.captureScreenshot', params)
+    return Buffer.from(data as string, 'base64')
   }
 
   /** Register a callback for each captured frame. */

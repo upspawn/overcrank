@@ -12,6 +12,8 @@ import { encodeFrames, checkFfmpeg, stitchSegments } from './encoder'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
+import { execSync } from 'node:child_process'
 import type { RenderOptions, RenderStats } from './types'
 
 export { Renderer, createRenderer } from './renderer'
@@ -22,10 +24,44 @@ export type {
   FrameFormat, CDPPage, CDPSession,
 } from './types'
 
+const BROWSER_ARGS = [
+  '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+  '--disable-gpu', '--disable-software-rasterizer',
+  '--force-device-scale-factor=1',
+]
+
+const BEGIN_FRAME_ARGS = [
+  '--enable-begin-frame-control',
+  '--run-all-compositor-stages-before-draw',
+  '--disable-threaded-animation',
+  '--disable-threaded-scrolling',
+]
+
+/**
+ * Find chrome-headless-shell binary (supports beginFrame, Linux only).
+ * Returns the path if found, null otherwise.
+ */
+function findHeadlessShell(): string | null {
+  if (process.platform !== 'linux') return null
+
+  // Check Playwright's cache
+  try {
+    const result = execSync(
+      'find ${HOME}/.cache/ms-playwright -name "headless_shell" -type f 2>/dev/null | head -1',
+      { encoding: 'utf-8', timeout: 3000 },
+    )
+    const path = result.trim()
+    if (path && existsSync(path)) return path
+  } catch {}
+
+  return null
+}
+
 /**
  * Render a web page to video. The simple, batteries-included API.
  *
- * Opens a browser, injects virtual clock, captures frames, encodes to video.
+ * On Linux with chrome-headless-shell: uses HeadlessExperimental.beginFrame (~2x faster).
+ * On macOS or without headless shell: uses Page.captureScreenshot.
  */
 export async function render(
   url: string,
@@ -53,19 +89,24 @@ export async function render(
     throw new Error('ffmpeg not found. Install it: brew install ffmpeg')
   }
 
+  // Try chrome-headless-shell for beginFrame support (Linux only, ~2x faster)
+  const headlessShell = findHeadlessShell()
+  const launchOptions = headlessShell
+    ? {
+        executablePath: headlessShell,
+        headless: true as const,
+        args: [...BROWSER_ARGS, ...BEGIN_FRAME_ARGS],
+      }
+    : {
+        headless: true as const,
+        args: BROWSER_ARGS,
+      }
+
   const ext = format === 'png' ? 'png' : 'jpg'
   const tmpDir = join(tmpdir(), `overcrank-${Date.now()}`)
   await mkdir(tmpDir, { recursive: true })
 
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu', '--disable-software-rasterizer',
-      '--force-device-scale-factor=1',
-    ],
-  })
-
+  const browser = await chromium.launch(launchOptions)
   const overallStart = performance.now()
 
   try {
@@ -76,6 +117,14 @@ export async function render(
 
     const renderer = await Renderer.create(page)
     renderer.setQuality(quality).setFormat(format)
+
+    // Kick virtual clock
+    await renderer.advance(1)
+
+    // Render an initial frame so the page is composited
+    if (renderer.usesBeginFrame) {
+      await renderer.capture() // prime the compositor
+    }
 
     // Determine capture timestamps
     let captureTimes: number[]
@@ -92,7 +141,8 @@ export async function render(
 
     // Capture frames
     const frameEntries: Array<{ path: string; durationS: number }> = []
-    let currentMs = 0
+    // currentMs starts at 1 because we kicked the clock above
+    let currentMs = 1
 
     for (let i = 0; i < captureTimes.length; i++) {
       const targetMs = captureTimes[i]

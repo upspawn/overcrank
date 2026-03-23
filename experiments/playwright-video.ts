@@ -22,45 +22,21 @@ const DURATION_S = 5
 const FPS = 30
 const TOTAL_FRAMES = DURATION_S * FPS
 const INTERVAL_MS = 1000 / FPS
+const RAF_STEP_MS = 16
 
-const TEST_PAGE = `<!DOCTYPE html>
-<html><head><style>
-  body { margin: 0; overflow: hidden; }
-  canvas { display: block; }
-</style></head><body>
-<canvas id="c" width="${WIDTH}" height="${HEIGHT}"></canvas>
-<script>
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-
-function draw(t) {
-  const time = t / 1000;
-  ctx.fillStyle = 'rgba(10, 10, 26, 0.08)';
-  ctx.fillRect(0, 0, ${WIDTH}, ${HEIGHT});
-
-  for (let i = 0; i < 50; i++) {
-    const x = ${WIDTH}/2 + Math.cos(time * 0.5 + i * 0.3) * (100 + i * 5);
-    const y = ${HEIGHT}/2 + Math.sin(time * 0.7 + i * 0.3) * (80 + i * 4);
-    const hue = (i * 7 + time * 30) % 360;
-    const pulse = Math.sin(time * 2 + i) * 0.5 + 0.5;
-
-    const gradient = ctx.createRadialGradient(x, y, 0, x, y, 12);
-    gradient.addColorStop(0, 'hsla(' + hue + ', 100%, 70%, ' + (0.4 + pulse * 0.6) + ')');
-    gradient.addColorStop(1, 'hsla(' + hue + ', 100%, 30%, 0)');
-    ctx.beginPath();
-    ctx.arc(x, y, 12, 0, Math.PI * 2);
-    ctx.fillStyle = gradient;
-    ctx.fill();
+/** Advance virtual time in 16ms steps to match native RAF rate. */
+const ADVANCE_FN = `(function(ms) {
+  var remaining = ms;
+  while (remaining > 0) {
+    var chunk = Math.min(remaining, ${RAF_STEP_MS});
+    window.__virtualTime.advance(chunk);
+    remaining -= chunk;
   }
+})`
 
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.font = '14px monospace';
-  ctx.fillText(time.toFixed(1) + 's', 12, 24);
-
-  requestAnimationFrame(draw);
-}
-requestAnimationFrame(draw);
-</script></body></html>`;
+import { readFileSync } from 'node:fs'
+const DEMO_PATH = join(import.meta.dir, '..', 'examples', 'demo.html')
+const TEST_PAGE = readFileSync(DEMO_PATH, 'utf-8')
 
 async function servePage(): Promise<{ port: number; close: () => void }> {
   const server = http.createServer((_req, res) => {
@@ -105,7 +81,9 @@ async function benchCDP(port: number): Promise<{ fps: number; totalMs: number; f
 
   const concatLines: string[] = []
   for (let i = 0; i < TOTAL_FRAMES; i++) {
-    await page.evaluate((ms: number) => (window as any).__virtualTime.advance(ms), INTERVAL_MS)
+    await page.evaluate(([ms, step]) => {
+      let r = ms; while (r > 0) { const c = Math.min(r, step); (window as any).__virtualTime.advance(c); r -= c }
+    }, [INTERVAL_MS, RAF_STEP_MS] as const)
     const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 80, optimizeForSpeed: true })
     const framePath = join(outDir, `frame-${String(i).padStart(6, '0')}.jpg`)
     await writeFile(framePath, Buffer.from(data as string, 'base64'))
@@ -150,9 +128,11 @@ async function benchPlaywrightVideo(port: number): Promise<{ fps: number; totalM
 
   // Advance virtual time frame by frame
   for (let i = 0; i < TOTAL_FRAMES; i++) {
-    await page.evaluate((ms: number) => (window as any).__virtualTime.advance(ms), INTERVAL_MS)
-    // Small yield to let compositor render the frame
-    await page.waitForTimeout(1)
+    await page.evaluate(([ms, step]) => {
+      let r = ms; while (r > 0) { const c = Math.min(r, step); (window as any).__virtualTime.advance(c); r -= c }
+    }, [INTERVAL_MS, RAF_STEP_MS] as const)
+    // Yield a full compositor frame cycle so the frame is actually rendered
+    await page.waitForTimeout(16)
   }
 
   const captureMs = performance.now() - start
@@ -161,8 +141,9 @@ async function benchPlaywrightVideo(port: number): Promise<{ fps: number; totalM
   const videoPath = await page.video()!.path()
   await context.close()
 
-  // Remap timestamps to correct FPS
-  await ffmpeg(['-y', '-i', videoPath, '-filter:v', `setpts=N/${FPS}/TB`, '-r', String(FPS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', outputPath])
+  // Remap: stretch to target duration (N/FPS/TB sets each frame to 1/FPS apart)
+  const targetDuration = DURATION_S
+  await ffmpeg(['-y', '-i', videoPath, '-filter:v', `setpts=N/${FPS}/TB`, '-t', String(targetDuration), '-r', String(FPS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', outputPath])
 
   const totalMs = performance.now() - start
   await browser.close()
@@ -191,11 +172,11 @@ async function benchPlaywrightVideoFast(port: number): Promise<{ fps: number; to
   const start = performance.now()
 
   // Advance all frames in one evaluate — zero IPC per frame
-  await page.evaluate((opts: { frames: number; intervalMs: number }) => {
+  await page.evaluate((opts: { frames: number; intervalMs: number; step: number }) => {
     for (let i = 0; i < opts.frames; i++) {
-      ;(window as any).__virtualTime.advance(opts.intervalMs)
+      var rem = opts.intervalMs; while (rem > 0) { var ch = Math.min(rem, opts.step); (window as any).__virtualTime.advance(ch); rem -= ch }
     }
-  }, { frames: TOTAL_FRAMES, intervalMs: INTERVAL_MS })
+  }, { frames: TOTAL_FRAMES, intervalMs: INTERVAL_MS, step: RAF_STEP_MS })
 
   // Give compositor time to flush
   await page.waitForTimeout(500)
