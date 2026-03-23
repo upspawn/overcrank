@@ -184,6 +184,7 @@ describe('render() high-level API', () => {
       fps: 5,
       width: 320,
       height: 240,
+      workers: 1, // single tab so progress fires per frame
       x264Preset: 'ultrafast',
       onProgress: (frame, total) => { progress.push([frame, total]) },
     })
