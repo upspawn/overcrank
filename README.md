@@ -6,9 +6,25 @@ Render any web page to video, faster than real-time.
 
 ## How it works
 
-Overcrank patches the browser's time APIs (requestAnimationFrame, Date, setTimeout, setInterval, performance.now) with a virtual clock. Instead of waiting for real time to pass, it advances time instantly and captures a CDP screenshot at each frame boundary. Frames are piped to ffmpeg for encoding.
+Overcrank patches the browser's time APIs (requestAnimationFrame, Date, setTimeout, setInterval, performance.now) with a virtual clock. Instead of waiting for real time to pass, it advances time instantly and captures a screenshot at each frame boundary. Frames are piped to ffmpeg for encoding.
 
-This means a 5-minute animation renders in seconds, not minutes.
+On Linux, overcrank auto-detects `chrome-headless-shell` and uses `HeadlessExperimental.beginFrame` — a single CDP call that forces the compositor to render and returns the screenshot inline. This is **2-3x faster** than standard CDP screenshots.
+
+## Performance
+
+| Platform | Method | Speed | Any HTML? |
+|----------|--------|-------|-----------|
+| Linux | `beginFrame` + `--disable-frame-rate-limit` | **~78 fps** (5.5ms/frame) | Yes |
+| Linux | `beginFrame` (default) | ~60 fps (13ms/frame) | Yes |
+| macOS | `Page.captureScreenshot` | ~30 fps (33ms/frame) | Yes |
+
+Combine with lower FPS for faster-than-real-time rendering:
+
+| Output FPS | Linux | macOS |
+|------------|-------|-------|
+| 30 fps | 2.6x real-time | 1x |
+| 10 fps | 7.8x real-time | 3x |
+| 5 fps | 15x real-time | 6x |
 
 ## Install
 
@@ -31,17 +47,19 @@ apt install ffmpeg     # Linux
 ```typescript
 import { render } from 'overcrank'
 
-await render('https://my-animation.com', 'output.mp4', {
+const stats = await render('https://my-animation.com', 'output.mp4', {
   duration: 10,  // seconds
   fps: 30,
   width: 1920,
   height: 1080,
 })
+
+console.log(`${stats.frames} frames, ${stats.speedup}x real-time`)
 ```
 
 ## Advanced: control each frame
 
-Works with both Playwright and Puppeteer — just pass your page object.
+Works with both Playwright and Puppeteer — just pass your page object. On Linux with `chrome-headless-shell`, `Renderer.create()` auto-detects and uses `beginFrame` for faster capture.
 
 **Playwright:**
 ```typescript
@@ -55,6 +73,8 @@ await page.goto('https://my-animation.com')
 
 const renderer = await Renderer.create(page)
 renderer.setQuality(90).setFormat('jpeg')
+
+console.log(renderer.usesBeginFrame) // true on Linux, false on macOS
 
 renderer.onFrame(async (frame) => {
   // frame.data — JPEG or PNG Buffer
@@ -92,7 +112,7 @@ const renderer = await Renderer.create(page)
 **Lossless PNG frames:**
 ```typescript
 const renderer = await Renderer.create(page)
-renderer.setFormat('png')  // lossless, larger files
+renderer.setFormat('png')  // lossless, larger files, slower capture
 ```
 
 ## Variable framerate
@@ -117,6 +137,8 @@ Overcrank uses ffmpeg's concat demuxer to handle variable-duration frames correc
 
 High-level API — opens a browser, renders, encodes, returns stats.
 
+On Linux, auto-discovers `chrome-headless-shell` in Playwright's cache and uses `beginFrame` for ~2-3x faster capture.
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `duration` | `number` | — | Duration in seconds (required unless `timestamps` is set) |
@@ -134,7 +156,7 @@ Returns `RenderStats`: `{ frames, durationMs, wallClockMs, speedup }`
 
 ### `Renderer`
 
-Low-level class — attach to an existing Playwright/Puppeteer page.
+Low-level class — attach to an existing Playwright/Puppeteer page. Auto-detects `beginFrame` support.
 
 ```typescript
 const renderer = await Renderer.create(page)
@@ -145,7 +167,7 @@ const renderer = await Renderer.create(page)
 - `renderer.setFormat('jpeg' | 'png')` — screenshot format
 
 **Actions:**
-- `renderer.advance(ms)` — advance virtual time
+- `renderer.advance(ms)` — advance virtual time (steps at 16ms to match 60fps RAF)
 - `renderer.capture()` — take a screenshot, returns `Frame`
 - `renderer.onFrame(handler)` — callback for each capture (chainable)
 - `renderer.currentTime()` — get current virtual time from browser
@@ -154,6 +176,7 @@ const renderer = await Renderer.create(page)
 **State:**
 - `renderer.frameCount` — number of frames captured
 - `renderer.elapsedMs` — total virtual time advanced
+- `renderer.usesBeginFrame` — whether the fast backend is active
 
 ### `VIRTUAL_CLOCK_SCRIPT`
 
@@ -166,6 +189,37 @@ Encode frame images to MP4 via ffmpeg concat demuxer. Used internally by `render
 ### `checkFfmpeg()`
 
 Returns `true` if ffmpeg is available on the system.
+
+## How the virtual clock works
+
+The virtual clock is a self-contained IIFE injected into the page before any scripts run. It patches:
+
+- `requestAnimationFrame` / `cancelAnimationFrame` — queues callbacks, flushes on advance
+- `setTimeout` / `clearTimeout` — tracks timers, fires when virtual time reaches their deadline
+- `setInterval` / `clearInterval` — same, with automatic re-scheduling
+- `Date` / `Date.now()` — returns virtual time offset from session start
+- `performance.now()` — returns virtual time in ms
+
+`window.__virtualTime.advance(ms)` advances the clock and flushes all due timers and RAF callbacks synchronously. This is what makes "faster than real-time" possible — a 5-minute animation completes in seconds because we skip the waiting.
+
+The `advance()` method steps in 16ms increments internally (matching the browser's native 60fps RAF rate) so that accumulated animations — canvas trails, physics simulations, anything that depends on previous frames — render correctly.
+
+## Architecture
+
+```
+Your code
+  │
+  ├── render(url, output, options)     ← high-level: URL → video
+  │     ├── Renderer.create(page)      ← auto-detects beginFrame
+  │     ├── advance() + capture() loop
+  │     └── encodeFrames() → ffmpeg
+  │
+  └── Renderer.create(page)            ← low-level: frame-by-frame control
+        ├── virtual clock (JS IIFE)    ← patches RAF, Date, setTimeout, performance.now
+        └── capture backend
+              ├── beginFrame           ← Linux: composite + screenshot in 1 call (~5ms)
+              └── captureScreenshot    ← macOS: standard CDP (~33ms)
+```
 
 ## Use cases
 
