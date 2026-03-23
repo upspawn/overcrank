@@ -1,0 +1,23 @@
+{
+  "name": "overcrank",
+  "version": "0.0.1",
+  "description": "Render any web page to video, faster than real-time",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["video", "rendering", "playwright", "puppeteer", "cdp", "ffmpeg", "screenshot", "animation"],
+  "license": "MIT",
+  "peerDependencies": {
+    "playwright": ">=1.40.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0",
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
