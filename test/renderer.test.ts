@@ -1,7 +1,10 @@
 import { describe, test, expect } from 'bun:test'
 import { createRenderer } from '../src/renderer'
+import { render } from '../src/index'
 import { chromium } from 'playwright'
 import { VIRTUAL_CLOCK_SCRIPT } from '../src/virtual-clock'
+import { existsSync } from 'node:fs'
+import { rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const FIXTURE_PATH = join(import.meta.dir, 'fixtures', 'animation.html')
@@ -56,4 +59,42 @@ describe('renderer', () => {
     await renderer.close()
     await browser.close()
   }, 15_000)
+})
+
+describe('render() high-level API', () => {
+  const OUTPUT = join(import.meta.dir, 'output-test.mp4')
+
+  test('renders a CSS animation to video', async () => {
+    const stats = await render(`file://${FIXTURE_PATH}`, OUTPUT, {
+      duration: 2,
+      fps: 10,
+      width: 640,
+      height: 480,
+      x264Preset: 'ultrafast',
+      crf: 28,
+    })
+
+    expect(existsSync(OUTPUT)).toBe(true)
+    const st = await stat(OUTPUT)
+    expect(st.size).toBeGreaterThan(1000)
+    expect(stats.frames).toBe(21) // 0ms to 2000ms at 100ms intervals = 21 frames
+    expect(stats.speedup).toBeGreaterThan(0)
+
+    await rm(OUTPUT, { force: true })
+  }, 60_000)
+
+  test('renders with variable timestamps', async () => {
+    const stats = await render(`file://${FIXTURE_PATH}`, OUTPUT, {
+      timestamps: [0, 100, 500, 1000, 1500, 2000],
+      width: 640,
+      height: 480,
+      x264Preset: 'ultrafast',
+      crf: 28,
+    })
+
+    expect(existsSync(OUTPUT)).toBe(true)
+    expect(stats.frames).toBe(6)
+
+    await rm(OUTPUT, { force: true })
+  }, 60_000)
 })
