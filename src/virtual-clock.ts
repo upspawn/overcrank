@@ -1,11 +1,11 @@
 /**
  * Virtual clock — injected into the browser page before any other scripts.
  *
- * The source of truth is virtual-clock.js (lintable, syntax-checkable).
+ * The source of truth is virtual-clock.iife.js (lintable, syntax-checkable).
  * This file inlines it as a string for reliable module resolution
  * across Node, Bun, and npm package consumers.
  *
- * To update: edit virtual-clock.js, then run `bun scripts/inline-clock.ts`
+ * To update: edit virtual-clock.iife.js, then run `bun scripts/inline-clock.ts`
  */
 
 /* eslint-disable max-len */
