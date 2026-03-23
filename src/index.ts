@@ -7,21 +7,20 @@
 
 import { chromium } from 'playwright'
 import { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
-import { createRenderer } from './renderer'
+import { Renderer, createRenderer } from './renderer'
 import { encodeFrames, checkFfmpeg, stitchSegments } from './encoder'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { RenderOptions, RenderStats } from './types'
 
-export { createRenderer } from './renderer'
+export { Renderer, createRenderer } from './renderer'
 export { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
 export { checkFfmpeg, encodeFrames, stitchSegments } from './encoder'
 export type {
   RenderOptions, RenderStats, Frame, FrameHandler,
-  RendererOptions, CDPPage, CDPSession,
+  FrameFormat, CDPPage, CDPSession,
 } from './types'
-export type { Renderer } from './renderer'
 
 /**
  * Render a web page to video. The simple, batteries-included API.
@@ -39,9 +38,11 @@ export async function render(
     width = 1920,
     height = 1080,
     quality = 80,
+    format = 'jpeg',
     x264Preset = 'veryfast',
     crf = 23,
     timestamps,
+    onProgress,
   } = options
 
   if (!duration && !timestamps) {
@@ -52,6 +53,7 @@ export async function render(
     throw new Error('ffmpeg not found. Install it: brew install ffmpeg')
   }
 
+  const ext = format === 'png' ? 'png' : 'jpg'
   const tmpDir = join(tmpdir(), `overcrank-${Date.now()}`)
   await mkdir(tmpDir, { recursive: true })
 
@@ -72,7 +74,8 @@ export async function render(
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
 
-    const renderer = await createRenderer(page, { fps, quality })
+    const renderer = await Renderer.create(page)
+    renderer.setQuality(quality).setFormat(format)
 
     // Determine capture timestamps
     let captureTimes: number[]
@@ -100,7 +103,7 @@ export async function render(
       }
 
       const frame = await renderer.capture()
-      const framePath = join(tmpDir, `frame-${String(i).padStart(6, '0')}.jpg`)
+      const framePath = join(tmpDir, `frame-${String(i).padStart(6, '0')}.${ext}`)
       await writeFile(framePath, frame.data)
 
       let durationS: number
@@ -110,6 +113,8 @@ export async function render(
         durationS = 1 / fps
       }
       frameEntries.push({ path: framePath, durationS })
+
+      onProgress?.(i + 1, captureTimes.length)
     }
 
     await renderer.close()

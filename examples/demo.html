@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a1a;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const W = canvas.width;
+const H = canvas.height;
+const particles = [];
+const PARTICLE_COUNT = 300;
+
+// Create particles in a spiral pattern
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  const angle = (i / PARTICLE_COUNT) * Math.PI * 12;
+  const radius = (i / PARTICLE_COUNT) * Math.min(W, H) * 0.4;
+  particles.push({
+    baseX: W / 2 + Math.cos(angle) * radius,
+    baseY: H / 2 + Math.sin(angle) * radius,
+    x: W / 2,
+    y: H / 2,
+    size: 2 + Math.random() * 3,
+    hue: (i / PARTICLE_COUNT) * 360,
+    speed: 0.5 + Math.random() * 1.5,
+    offset: Math.random() * Math.PI * 2,
+    orbitRadius: 10 + Math.random() * 30,
+  });
+}
+
+function draw(t) {
+  const time = t / 1000;
+
+  // Fade trail
+  ctx.fillStyle = 'rgba(10, 10, 26, 0.08)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Breathing effect
+  const breathe = Math.sin(time * 0.5) * 0.3 + 1;
+
+  for (const p of particles) {
+    // Lerp to base position with orbit
+    const targetX = p.baseX + Math.cos(time * p.speed + p.offset) * p.orbitRadius;
+    const targetY = p.baseY + Math.sin(time * p.speed + p.offset) * p.orbitRadius;
+
+    p.x += (targetX * breathe + W / 2 * (1 - breathe) - p.x) * 0.05;
+    p.y += (targetY * breathe + H / 2 * (1 - breathe) - p.y) * 0.05;
+
+    // Pulsing glow
+    const pulse = Math.sin(time * 2 + p.offset) * 0.5 + 0.5;
+    const alpha = 0.4 + pulse * 0.6;
+    const size = p.size * (0.8 + pulse * 0.4);
+
+    // Draw glow
+    const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size * 4);
+    gradient.addColorStop(0, `hsla(${p.hue + time * 20}, 100%, 70%, ${alpha})`);
+    gradient.addColorStop(0.5, `hsla(${p.hue + time * 20}, 100%, 50%, ${alpha * 0.3})`);
+    gradient.addColorStop(1, `hsla(${p.hue + time * 20}, 100%, 30%, 0)`);
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size * 4, 0, Math.PI * 2);
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Draw core
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${p.hue + time * 20}, 100%, 90%, ${alpha})`;
+    ctx.fill();
+  }
+
+  // Draw connections between nearby particles
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 50) {
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Timer overlay
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.font = '14px monospace';
+  ctx.fillText(time.toFixed(1) + 's', 12, 24);
+
+  requestAnimationFrame(draw);
+}
+
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>

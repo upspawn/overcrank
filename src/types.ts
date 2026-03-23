@@ -1,8 +1,7 @@
 /**
  * Minimal page interface — accepts Playwright or Puppeteer page objects.
- * createRenderer() duck-types the CDP session creation automatically.
+ * Renderer duck-types the CDP session creation automatically.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface CDPPage {
   evaluate<T>(fn: (...args: any[]) => T, ...args: any[]): Promise<T>
   // Playwright: page.context().newCDPSession(page)
@@ -16,6 +15,9 @@ export interface CDPSession {
   detach(): Promise<void>
 }
 
+/** Screenshot format */
+export type FrameFormat = 'jpeg' | 'png'
+
 /** Options for the high-level render() function */
 export interface RenderOptions {
   /** Duration in seconds (for duration mode) */
@@ -28,23 +30,21 @@ export interface RenderOptions {
   height?: number
   /** JPEG quality 1-100 (default: 80) */
   quality?: number
+  /** Screenshot format (default: 'jpeg') */
+  format?: FrameFormat
   /** x264 preset (default: 'veryfast') */
   x264Preset?: string
   /** x264 CRF value (default: 23) */
   crf?: number
   /** Timestamps (ms) to capture — overrides duration/fps for variable framerate */
   timestamps?: number[]
-}
-
-/** Options for createRenderer() — lower-level control */
-export interface RendererOptions {
-  fps?: number
-  quality?: number
+  /** Progress callback */
+  onProgress?: (frame: number, total: number) => void
 }
 
 /** A single captured frame */
 export interface Frame {
-  /** Raw JPEG buffer */
+  /** Raw image buffer (JPEG or PNG) */
   data: Buffer
   /** Virtual timestamp in ms */
   timestamp: number

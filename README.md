@@ -45,7 +45,7 @@ Works with both Playwright and Puppeteer — just pass your page object.
 
 **Playwright:**
 ```typescript
-import { createRenderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
+import { Renderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
@@ -53,10 +53,11 @@ const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
 await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
 await page.goto('https://my-animation.com')
 
-const renderer = await createRenderer(page)
+const renderer = await Renderer.create(page)
+renderer.setQuality(90).setFormat('jpeg')
 
 renderer.onFrame(async (frame) => {
-  // frame.data — JPEG Buffer
+  // frame.data — JPEG or PNG Buffer
   // frame.timestamp — virtual time in ms
   // frame.index — 0-based frame number
 })
@@ -66,13 +67,16 @@ for (let t = 0; t < 10_000; t += 33) {
   await renderer.capture()
 }
 
+console.log(renderer.frameCount)  // 303
+console.log(renderer.elapsedMs)   // 9999
+
 await renderer.close()
 await browser.close()
 ```
 
 **Puppeteer:**
 ```typescript
-import { createRenderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
+import { Renderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
 import puppeteer from 'puppeteer'
 
 const browser = await puppeteer.launch()
@@ -81,8 +85,14 @@ await page.setViewport({ width: 1920, height: 1080 })
 await page.evaluateOnNewDocument(VIRTUAL_CLOCK_SCRIPT)
 await page.goto('https://my-animation.com')
 
-const renderer = await createRenderer(page)
+const renderer = await Renderer.create(page)
 // same API from here — advance, capture, onFrame, close
+```
+
+**Lossless PNG frames:**
+```typescript
+const renderer = await Renderer.create(page)
+renderer.setFormat('png')  // lossless, larger files
 ```
 
 ## Variable framerate
@@ -114,21 +124,36 @@ High-level API — opens a browser, renders, encodes, returns stats.
 | `width` | `number` | `1920` | Viewport width |
 | `height` | `number` | `1080` | Viewport height |
 | `quality` | `number` | `80` | JPEG quality (1-100) |
+| `format` | `'jpeg' \| 'png'` | `'jpeg'` | Screenshot format |
 | `x264Preset` | `string` | `'veryfast'` | ffmpeg x264 preset |
 | `crf` | `number` | `23` | ffmpeg CRF value |
 | `timestamps` | `number[]` | — | Capture at specific ms timestamps (overrides duration/fps) |
+| `onProgress` | `(frame, total) => void` | — | Progress callback |
 
 Returns `RenderStats`: `{ frames, durationMs, wallClockMs, speedup }`
 
-### `createRenderer(page, options)`
+### `Renderer`
 
-Low-level API — attach to an existing Playwright/Puppeteer page.
+Low-level class — attach to an existing Playwright/Puppeteer page.
 
+```typescript
+const renderer = await Renderer.create(page)
+```
+
+**Config (chainable):**
+- `renderer.setQuality(n)` — JPEG quality 1-100
+- `renderer.setFormat('jpeg' | 'png')` — screenshot format
+
+**Actions:**
 - `renderer.advance(ms)` — advance virtual time
 - `renderer.capture()` — take a screenshot, returns `Frame`
-- `renderer.onFrame(handler)` — callback for each capture
-- `renderer.currentTime()` — get current virtual time
+- `renderer.onFrame(handler)` — callback for each capture (chainable)
+- `renderer.currentTime()` — get current virtual time from browser
 - `renderer.close()` — detach CDP session
+
+**State:**
+- `renderer.frameCount` — number of frames captured
+- `renderer.elapsedMs` — total virtual time advanced
 
 ### `VIRTUAL_CLOCK_SCRIPT`
 
