@@ -35,6 +35,7 @@ const BEGIN_FRAME_ARGS = [
   '--run-all-compositor-stages-before-draw',
   '--disable-threaded-animation',
   '--disable-threaded-scrolling',
+  '--disable-frame-rate-limit',
 ]
 
 /**
