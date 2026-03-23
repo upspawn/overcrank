@@ -16,6 +16,7 @@
     "url": "https://github.com/upspawn/overcrank.git"
   },
   "homepage": "https://github.com/upspawn/overcrank",
+  "author": "Oleksandr Erm <alex@upspawn.com> (https://github.com/alexerm)",
   "scripts": {
     "test": "bun test",
     "build": "bun build src/index.ts --outdir dist --target node",
