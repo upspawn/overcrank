@@ -13,9 +13,11 @@ This means a 5-minute animation renders in seconds, not minutes.
 ## Install
 
 ```bash
+# With Playwright (recommended)
 npm install overcrank playwright
-# or
-bun add overcrank playwright
+
+# Or with Puppeteer
+npm install overcrank puppeteer
 ```
 
 You also need [ffmpeg](https://ffmpeg.org/) installed:
@@ -39,26 +41,26 @@ await render('https://my-animation.com', 'output.mp4', {
 
 ## Advanced: control each frame
 
+Works with both Playwright and Puppeteer — just pass your page object.
+
+**Playwright:**
 ```typescript
 import { createRenderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
-
-// Inject virtual clock before navigation
 await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
 await page.goto('https://my-animation.com')
 
 const renderer = await createRenderer(page)
 
 renderer.onFrame(async (frame) => {
-  // frame.data is a JPEG Buffer
-  // frame.timestamp is the virtual time in ms
-  // frame.index is the 0-based frame number
+  // frame.data — JPEG Buffer
+  // frame.timestamp — virtual time in ms
+  // frame.index — 0-based frame number
 })
 
-// Advance time and capture at your own pace
 for (let t = 0; t < 10_000; t += 33) {
   await renderer.advance(33)
   await renderer.capture()
@@ -66,6 +68,21 @@ for (let t = 0; t < 10_000; t += 33) {
 
 await renderer.close()
 await browser.close()
+```
+
+**Puppeteer:**
+```typescript
+import { createRenderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
+import puppeteer from 'puppeteer'
+
+const browser = await puppeteer.launch()
+const page = await browser.newPage()
+await page.setViewport({ width: 1920, height: 1080 })
+await page.evaluateOnNewDocument(VIRTUAL_CLOCK_SCRIPT)
+await page.goto('https://my-animation.com')
+
+const renderer = await createRenderer(page)
+// same API from here — advance, capture, onFrame, close
 ```
 
 ## Variable framerate
