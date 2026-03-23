@@ -8,7 +8,8 @@
 
 import type { CDPPage, CDPSession, Frame, FrameFormat, FrameHandler } from './types'
 
-const FAST_FORWARD_CHUNK_MS = 500
+/** Step size for virtual time advance — matches browser's native ~60fps RAF rate. */
+const RAF_STEP_MS = 16
 
 /** Duck-type Playwright vs Puppeteer CDP session creation. */
 async function openCDPSession(page: CDPPage): Promise<CDPSession> {
@@ -85,17 +86,24 @@ export class Renderer {
 
   // --- Actions ---
 
-  /** Advance virtual time by the given number of milliseconds. */
+  /**
+   * Advance virtual time by the given number of milliseconds.
+   * Steps in ~16ms increments (matching browser's native 60fps RAF rate)
+   * so accumulated animations (trails, physics) render correctly.
+   * The stepping happens inside the browser in a single evaluate call.
+   */
   async advance(ms: number): Promise<void> {
-    let remaining = ms
-    while (remaining > 0) {
-      const chunk = Math.min(remaining, FAST_FORWARD_CHUNK_MS)
-      await this.page.evaluate(
-        (ms: number) => (window as any).__virtualTime.advance(ms),
-        chunk,
-      )
-      remaining -= chunk
-    }
+    await this.page.evaluate(
+      (opts: { ms: number; step: number }) => {
+        let remaining = opts.ms
+        while (remaining > 0) {
+          const chunk = Math.min(remaining, opts.step)
+          ;(window as any).__virtualTime.advance(chunk)
+          remaining -= chunk
+        }
+      },
+      { ms, step: RAF_STEP_MS },
+    )
     this._elapsedMs += ms
   }
 
