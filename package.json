@@ -13,11 +13,17 @@
   "keywords": ["video", "rendering", "playwright", "puppeteer", "cdp", "ffmpeg", "screenshot", "animation"],
   "license": "MIT",
   "peerDependencies": {
-    "playwright": ">=1.40.0"
+    "playwright": ">=1.40.0",
+    "puppeteer": ">=20.0.0"
+  },
+  "peerDependenciesMeta": {
+    "playwright": { "optional": true },
+    "puppeteer": { "optional": true }
   },
   "devDependencies": {
-    "playwright": "^1.55.0",
     "@types/bun": "latest",
+    "playwright": "^1.55.0",
+    "puppeteer": "^24.40.0",
     "typescript": "^5.7.0"
   }
 }

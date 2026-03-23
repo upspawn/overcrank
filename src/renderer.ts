@@ -10,6 +10,21 @@ import type { CDPPage, CDPSession, RendererOptions, Frame, FrameHandler } from '
 
 const FAST_FORWARD_CHUNK_MS = 500
 
+/** Duck-type Playwright vs Puppeteer CDP session creation. */
+async function createCDPSession(page: CDPPage): Promise<CDPSession> {
+  // Puppeteer: page.createCDPSession()
+  if (typeof page.createCDPSession === 'function') {
+    return page.createCDPSession()
+  }
+  // Playwright: page.context().newCDPSession(page)
+  if (typeof page.context === 'function') {
+    return page.context()!.newCDPSession(page)
+  }
+  throw new Error(
+    'Could not create CDP session. Pass a Playwright or Puppeteer page object.',
+  )
+}
+
 export interface Renderer {
   /** Advance virtual time by the given number of milliseconds */
   advance(ms: number): Promise<void>
@@ -25,6 +40,7 @@ export interface Renderer {
 
 /**
  * Create a renderer attached to an existing page.
+ * Accepts Playwright or Puppeteer page objects — detected automatically.
  * The page MUST already have the virtual clock script injected via addInitScript.
  */
 export async function createRenderer(
@@ -32,7 +48,7 @@ export async function createRenderer(
   options: RendererOptions = {},
 ): Promise<Renderer> {
   const { quality = 80 } = options
-  const cdp = await page.context().newCDPSession(page)
+  const cdp = await createCDPSession(page)
   const handlers: FrameHandler[] = []
   let frameIndex = 0
 

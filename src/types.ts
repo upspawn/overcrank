@@ -1,7 +1,14 @@
-/** Minimal page interface — works with Playwright or Puppeteer */
+/**
+ * Minimal page interface — accepts Playwright or Puppeteer page objects.
+ * createRenderer() duck-types the CDP session creation automatically.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
 export interface CDPPage {
   evaluate<T>(fn: (...args: any[]) => T, ...args: any[]): Promise<T>
-  context(): { newCDPSession(page: any): Promise<CDPSession> }
+  // Playwright: page.context().newCDPSession(page)
+  context?: () => { newCDPSession(page: any): Promise<CDPSession> }
+  // Puppeteer: page.createCDPSession()
+  createCDPSession?: () => Promise<CDPSession>
 }
 
 export interface CDPSession {
