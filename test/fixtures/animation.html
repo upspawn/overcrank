@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 0; background: #1a1a2e; overflow: hidden; }
+  .box {
+    width: 100px;
+    height: 100px;
+    background: #e94560;
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    animation: slide 2s linear infinite;
+  }
+  @keyframes slide {
+    from { left: 0; }
+    to { left: calc(100% - 100px); }
+  }
+  .timer {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-family: monospace;
+    font-size: 24px;
+  }
+</style>
+</head>
+<body>
+  <div class="box"></div>
+  <div class="timer" id="timer">0.000s</div>
+  <script>
+    function updateTimer(timestamp) {
+      document.getElementById('timer').textContent = (timestamp / 1000).toFixed(3) + 's'
+      requestAnimationFrame(updateTimer)
+    }
+    requestAnimationFrame(updateTimer)
+  </script>
+</body>
+</html>
