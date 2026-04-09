@@ -62,3 +62,23 @@ export interface RenderStats {
   wallClockMs: number
   speedup: number
 }
+
+/** A single rendering job for renderMany() */
+export interface RenderJob {
+  url: string
+  output: string
+  options?: RenderOptions
+}
+
+/** Result for one job in a renderMany() batch */
+export type RenderJobResult =
+  | { index: number; job: RenderJob; ok: true; stats: RenderStats }
+  | { index: number; job: RenderJob; ok: false; error: Error }
+
+/** Options for renderMany() */
+export interface RenderManyOptions {
+  /** Max number of browsers to run concurrently (default: 4) */
+  concurrency?: number
+  /** Per-job progress callback — fires each time a job finishes */
+  onJobComplete?: (result: RenderJobResult) => void
+}

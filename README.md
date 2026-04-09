@@ -149,6 +149,32 @@ Not for html-in-canvas `paint`-event workloads (`layoutsubtree` +
 `drawElementImage`) — those require a real compositor paint to produce fresh
 element snapshots, which only the default backend triggers.
 
+## Batch rendering
+
+Rendering many pages at once — e.g. a batch of rrweb session replays — is almost always throughput-bound, and overcrank ships a bounded worker pool for exactly that case:
+
+```typescript
+import { renderMany } from 'overcrank'
+
+const jobs = sessions.map((s) => ({
+  url: `file://${s.replayHtmlPath}`,
+  output: `out/${s.id}.mp4`,
+  options: { duration: s.durationSec, fps: 30, width: 1280, height: 720 },
+}))
+
+const results = await renderMany(jobs, {
+  concurrency: 4, // one headless Chromium per slot
+  onJobComplete: (r) => {
+    if (r.ok) console.log(`✓ ${r.job.output} (${r.stats.speedup}x)`)
+    else console.error(`✗ ${r.job.output}: ${r.error.message}`)
+  },
+})
+```
+
+Each job is an independent `render()` call. Errors in one job don't affect the others — each result is either `{ ok: true, stats }` or `{ ok: false, error }`. Set `concurrency` to at most your physical CPU core count; each slot launches a full headless Chromium.
+
+For the single-long-recording case (splitting one timeline across workers), `renderMany` is *not* the right tool — use a single `render()` call, which is already faster than real-time for JS-driven content.
+
 ## Variable framerate
 
 Instead of fixed FPS, capture at specific timestamps:
@@ -220,6 +246,17 @@ The raw JavaScript string that patches browser time APIs. Inject via `page.addIn
 ### `encodeFrames(frames, outputPath, options)`
 
 Encode frame images to MP4 via ffmpeg concat demuxer. Used internally by `render()`, exposed for custom pipelines.
+
+### `renderMany(jobs, options)`
+
+Bounded worker pool for batch rendering — see [Batch rendering](#batch-rendering) above.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `concurrency` | `number` | `4` | Max concurrent browsers |
+| `onJobComplete` | `(result) => void` | — | Fires per-job, not in index order |
+
+Returns `RenderJobResult[]` in job-submission order. Each result is `{ index, job, ok: true, stats }` or `{ index, job, ok: false, error }`.
 
 ### `checkFfmpeg()`
 

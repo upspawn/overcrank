@@ -14,7 +14,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
 import { execSync } from 'node:child_process'
-import type { RenderOptions, RenderStats } from './types'
+import type {
+  RenderOptions, RenderStats, RenderJob, RenderJobResult, RenderManyOptions,
+} from './types'
 
 export { Renderer, createRenderer } from './renderer'
 export { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
@@ -27,6 +29,7 @@ export {
 export type {
   RenderOptions, RenderStats, Frame, FrameHandler,
   FrameFormat, CDPPage, CDPSession,
+  RenderJob, RenderJobResult, RenderManyOptions,
 } from './types'
 
 /**
@@ -231,4 +234,57 @@ export async function render(
     await browser.close()
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true })
   }
+}
+
+/**
+ * Render many pages to video concurrently with a bounded worker pool.
+ *
+ * Each job is an independent `render()` call — there's no timeline splitting
+ * or shared state between jobs. This is the right primitive for batch
+ * workloads like "convert 50 rrweb sessions to MP4s" where the parallelism
+ * is *across* recordings, not within one.
+ *
+ * Errors from individual jobs are isolated: one failing job does not affect
+ * the others. Each result carries either `{ ok: true, stats }` or
+ * `{ ok: false, error }`.
+ *
+ * Default concurrency is 4. Don't set it higher than your physical core
+ * count — each worker launches a full headless Chromium.
+ */
+export async function renderMany(
+  jobs: RenderJob[],
+  options: RenderManyOptions = {},
+): Promise<RenderJobResult[]> {
+  const { concurrency = 4, onJobComplete } = options
+  if (concurrency < 1) throw new Error('concurrency must be >= 1')
+  if (jobs.length === 0) return []
+
+  const results: RenderJobResult[] = new Array(jobs.length)
+  let nextIndex = 0
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex++
+      if (i >= jobs.length) return
+      const job = jobs[i]
+      let result: RenderJobResult
+      try {
+        const stats = await render(job.url, job.output, job.options ?? {})
+        result = { index: i, job, ok: true, stats }
+      } catch (err) {
+        result = {
+          index: i,
+          job,
+          ok: false,
+          error: err instanceof Error ? err : new Error(String(err)),
+        }
+      }
+      results[i] = result
+      onJobComplete?.(result)
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, worker)
+  await Promise.all(workers)
+  return results
 }
