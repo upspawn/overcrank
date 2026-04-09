@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin: 0; background: #000; }
+  #card {
+    font-family: system-ui;
+    font-size: 36px;
+    font-weight: bold;
+    color: white;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 24px 36px;
+    border-radius: 16px;
+    width: fit-content;
+    box-shadow: 0 20px 40px rgba(102, 126, 234, 0.4);
+  }
+  /* CSS animation — tests whether browser-driven animations respect virtual clock */
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+  }
+  #pulser {
+    animation: pulse 1s infinite;
+    display: inline-block;
+    padding: 16px 32px;
+    background: #ff6b6b;
+    color: white;
+    border-radius: 12px;
+    font-family: system-ui;
+    font-size: 28px;
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600" layoutsubtree>
+  <div id="card">Frame: 0</div>
+  <div id="pulser">CSS Pulse</div>
+</canvas>
+
+<script>
+window.__LOG = [];
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const card = document.getElementById('card');
+const pulser = document.getElementById('pulser');
+
+// Track paint events
+let paintEventCount = 0;
+canvas.addEventListener('paint', () => {
+  paintEventCount++;
+  window.__LOG.push(`paint fired, count=${paintEventCount}`);
+  renderScene();
+});
+window.__paintEventCount = () => paintEventCount;
+
+// Render function — called from paint event
+function renderScene() {
+  try {
+    ctx.clearRect(0, 0, 800, 600);
+
+    // Gradient background
+    const grad = ctx.createLinearGradient(0, 0, 800, 600);
+    grad.addColorStop(0, '#1a1a2e');
+    grad.addColorStop(1, '#16213e');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 800, 600);
+
+    // Draw the card (JS-driven text change + hue cycling)
+    ctx.drawElementImage(card, 40, 40);
+
+    // Draw the pulser (CSS-driven keyframe animation)
+    ctx.drawElementImage(pulser, 40, 360);
+
+    // Canvas-native circle on top to prove mixing works
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.arc(650, 150, 80, 0, Math.PI * 2);
+    ctx.fill();
+  } catch (e) {
+    window.__LOG.push(`renderScene ERROR: ${e.message}`);
+  }
+}
+
+// JS-driven animation loop — changes text/color/size to verify captures update
+let animFrameCount = 0;
+function tick(t) {
+  animFrameCount++;
+  card.textContent = `F${animFrameCount} t${Math.round(t)}`;
+  // JS-driven hue cycle — proves style changes get captured in drawElementImage
+  const hue = Math.round((t / 10) % 360);
+  card.style.background = `linear-gradient(135deg, hsl(${hue}, 70%, 60%), hsl(${(hue + 60) % 360}, 70%, 50%))`;
+  // Rely on paint event to render
+  window.__LOG.push(`tick ${animFrameCount} t=${Math.round(t)} hue=${hue}`);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+window.__getStats = () => ({
+  animFrameCount,
+  paintEventCount,
+  cardText: card.textContent,
+  pulserTransform: getComputedStyle(pulser).transform,
+  logTail: window.__LOG.slice(-8),
+});
+window.__HTML_IN_CANVAS_READY = true;
+</script>
+</body>
+</html>

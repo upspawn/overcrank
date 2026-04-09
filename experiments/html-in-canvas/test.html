@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  #label {
+    font-family: system-ui;
+    font-size: 48px;
+    font-weight: bold;
+    color: white;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px 40px;
+    border-radius: 12px;
+    width: fit-content;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="400" layoutsubtree>
+  <div id="label">HTML in Canvas!</div>
+</canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const label = document.getElementById('label');
+
+canvas.addEventListener('paint', () => {
+  ctx.clearRect(0, 0, 800, 400);
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, 800, 400);
+  ctx.drawElementImage(label, 50, 50);
+});
+
+// Signal to our test harness that the page is ready
+window.__HTML_IN_CANVAS_READY = true;
+</script>
+</body>
+</html>
