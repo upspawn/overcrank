@@ -8,7 +8,7 @@
 import { chromium } from 'playwright'
 import { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
 import { Renderer, createRenderer } from './renderer'
-import { encodeFrames, checkFfmpeg, stitchSegments } from './encoder'
+import { encodeFrames, checkFfmpeg, stitchSegments, StreamEncoder } from './encoder'
 import { writeFile, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -18,7 +18,7 @@ import type { RenderOptions, RenderStats } from './types'
 
 export { Renderer, createRenderer } from './renderer'
 export { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
-export { checkFfmpeg, encodeFrames, stitchSegments } from './encoder'
+export { checkFfmpeg, encodeFrames, stitchSegments, StreamEncoder } from './encoder'
 export {
   findChromeCanary,
   hasHtmlInCanvasSupport,
@@ -126,12 +126,20 @@ export async function render(
         args: [...BROWSER_ARGS],
       }
 
+  // Fixed-fps mode pipes frames directly to ffmpeg stdin — no tmpdir.
+  // Variable-timestamps mode still needs the concat demuxer for variable
+  // per-frame durations, so it keeps the file-based path.
+  const useStreamingEncoder = !timestamps
   const ext = format === 'png' ? 'png' : 'jpg'
-  const tmpDir = join(tmpdir(), `overcrank-${Date.now()}`)
-  await mkdir(tmpDir, { recursive: true })
+  const tmpDir = useStreamingEncoder
+    ? null
+    : join(tmpdir(), `overcrank-${Date.now()}`)
+  if (tmpDir) await mkdir(tmpDir, { recursive: true })
 
   const browser = await chromium.launch(launchOptions)
   const overallStart = performance.now()
+
+  let encoder: StreamEncoder | null = null
 
   try {
     const page = await browser.newPage({ viewport: { width, height } })
@@ -163,6 +171,10 @@ export async function render(
       }
     }
 
+    if (useStreamingEncoder) {
+      encoder = new StreamEncoder(outputPath, { fps, format, x264Preset, crf })
+    }
+
     // Capture frames
     const frameEntries: Array<{ path: string; durationS: number }> = []
     // currentMs starts at 1 because we kicked the clock above
@@ -177,16 +189,20 @@ export async function render(
       }
 
       const frame = await renderer.capture()
-      const framePath = join(tmpDir, `frame-${String(i).padStart(6, '0')}.${ext}`)
-      await writeFile(framePath, frame.data)
 
-      let durationS: number
-      if (i < captureTimes.length - 1) {
-        durationS = Math.max(0.001, (captureTimes[i + 1] - captureTimes[i]) / 1000)
+      if (encoder) {
+        await encoder.writeFrame(frame.data)
       } else {
-        durationS = 1 / fps
+        const framePath = join(tmpDir!, `frame-${String(i).padStart(6, '0')}.${ext}`)
+        await writeFile(framePath, frame.data)
+        let durationS: number
+        if (i < captureTimes.length - 1) {
+          durationS = Math.max(0.001, (captureTimes[i + 1] - captureTimes[i]) / 1000)
+        } else {
+          durationS = 1 / fps
+        }
+        frameEntries.push({ path: framePath, durationS })
       }
-      frameEntries.push({ path: framePath, durationS })
 
       onProgress?.(i + 1, captureTimes.length)
     }
@@ -194,7 +210,12 @@ export async function render(
     await renderer.close()
 
     // Encode to video
-    await encodeFrames(frameEntries, outputPath, { x264Preset, crf, fps })
+    if (encoder) {
+      await encoder.finish()
+      encoder = null
+    } else {
+      await encodeFrames(frameEntries, outputPath, { x264Preset, crf, fps })
+    }
 
     const wallClockMs = performance.now() - overallStart
     const durationMs = captureTimes[captureTimes.length - 1] - captureTimes[0]
@@ -206,7 +227,8 @@ export async function render(
       speedup: durationMs > 0 ? Math.round((durationMs / wallClockMs) * 10) / 10 : 0,
     }
   } finally {
+    if (encoder) encoder.kill()
     await browser.close()
-    await rm(tmpDir, { recursive: true, force: true })
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true })
   }
 }
