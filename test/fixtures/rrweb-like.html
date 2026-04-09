@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>rrweb-like replay fixture</title>
+<style>
+  body { margin: 0; font-family: -apple-system, sans-serif; background: #f4f4f8; color: #222; }
+  .page { max-width: 960px; margin: 24px auto; padding: 24px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  h1 { margin: 0 0 12px; font-size: 28px; }
+  .row { display: flex; gap: 12px; margin: 12px 0; }
+  .card { flex: 1; padding: 12px; border: 1px solid #e4e4ea; border-radius: 6px; background: #fafafc; }
+  .card h3 { margin: 0 0 6px; font-size: 14px; color: #555; }
+  .card .val { font-size: 22px; font-weight: 600; color: #0a66c2; }
+  .log { font-family: monospace; font-size: 12px; white-space: pre-wrap; height: 160px; overflow: hidden; background: #111; color: #b8f2c8; padding: 10px; border-radius: 4px; }
+  .cursor { position: fixed; width: 14px; height: 14px; background: #e53; border-radius: 50%; pointer-events: none; box-shadow: 0 0 8px rgba(230,51,51,0.6); z-index: 99; transition: none; }
+  .btn { display: inline-block; padding: 6px 12px; background: #0a66c2; color: #fff; border-radius: 4px; cursor: pointer; margin-right: 6px; }
+  .item { padding: 8px 10px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+  .item:nth-child(odd) { background: #fafbfd; }
+  .tag { display: inline-block; padding: 2px 8px; background: #eef; color: #339; border-radius: 10px; font-size: 11px; }
+</style>
+</head>
+<body>
+  <div class="cursor" id="cursor"></div>
+  <div class="page">
+    <h1 id="title">Dashboard Replay</h1>
+    <div class="row">
+      <div class="card"><h3>Active users</h3><div class="val" id="m1">0</div></div>
+      <div class="card"><h3>Requests/sec</h3><div class="val" id="m2">0</div></div>
+      <div class="card"><h3>p95 latency</h3><div class="val" id="m3">0ms</div></div>
+      <div class="card"><h3>Errors</h3><div class="val" id="m4">0</div></div>
+    </div>
+    <div>
+      <span class="btn">Refresh</span>
+      <span class="btn">Export CSV</span>
+      <span class="btn">Filter</span>
+    </div>
+    <div class="log" id="log"></div>
+    <div id="list"></div>
+  </div>
+
+<script>
+/**
+ * Synthetic rrweb-like replay driver.
+ *
+ * The cost driver we care about is the same as a real rrweb Replayer:
+ * a timeline of DOM mutations dispatched via setTimeout, each triggering
+ * layout/paint that overcrank has to screenshot. We build the timeline
+ * once, then play it through setTimeout so the virtual clock can
+ * fast-forward it the same way it would fast-forward rrweb.
+ */
+const cursor = document.getElementById('cursor');
+const log = document.getElementById('log');
+const list = document.getElementById('list');
+const title = document.getElementById('title');
+const m1 = document.getElementById('m1');
+const m2 = document.getElementById('m2');
+const m3 = document.getElementById('m3');
+const m4 = document.getElementById('m4');
+
+// Build a 30-second timeline of events. Each event is { at: ms, run: () => void }.
+const events = [];
+const DURATION_MS = 30_000;
+let logLines = [];
+
+function schedule(at, run) { events.push({ at, run }); }
+
+// Cursor movement — smooth, ~60 updates/sec
+for (let t = 0; t <= DURATION_MS; t += 16) {
+  const phase = t / 1000;
+  const x = 200 + 300 * Math.sin(phase * 0.8);
+  const y = 120 + 200 * Math.cos(phase * 0.6) + phase * 4;
+  schedule(t, () => { cursor.style.transform = `translate(${x}px, ${y}px)`; });
+}
+
+// Metric updates every 250ms
+for (let t = 0; t <= DURATION_MS; t += 250) {
+  const n = Math.floor(t / 250);
+  schedule(t, () => {
+    m1.textContent = String(120 + (n % 50));
+    m2.textContent = String(800 + Math.floor(Math.sin(n / 4) * 200));
+    m3.textContent = (40 + Math.sin(n / 3) * 15).toFixed(1) + 'ms';
+    m4.textContent = String(Math.floor(n / 10));
+  });
+}
+
+// Log lines streaming in every 400ms
+const logMessages = [
+  'GET /api/users 200 13ms',
+  'POST /api/events 201 42ms',
+  'GET /api/metrics 200 8ms',
+  'cache hit: users:daily',
+  'db query planned',
+  'websocket frame out',
+  'queue job dispatched',
+  'auth token refreshed',
+];
+for (let t = 400; t <= DURATION_MS; t += 400) {
+  schedule(t, () => {
+    const msg = `[${(t / 1000).toFixed(2)}s] ${logMessages[Math.floor(t / 400) % logMessages.length]}`;
+    logLines.push(msg);
+    if (logLines.length > 10) logLines.shift();
+    log.textContent = logLines.join('\n');
+  });
+}
+
+// List items being added/removed (realistic DOM mutation churn)
+for (let t = 1000; t <= DURATION_MS; t += 1000) {
+  const i = Math.floor(t / 1000);
+  schedule(t, () => {
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = `<span>Session #${i} — user_${1000 + i}</span><span class="tag">active</span>`;
+    list.appendChild(item);
+    if (list.children.length > 8) list.removeChild(list.firstElementChild);
+  });
+}
+
+// Title changes every 5s (representing tab title updates during replay)
+for (let t = 0; t <= DURATION_MS; t += 5000) {
+  schedule(t, () => { title.textContent = `Dashboard Replay · ${Math.floor(t / 1000)}s`; });
+}
+
+// Fire events via setTimeout — the virtual clock patches these
+events.sort((a, b) => a.at - b.at);
+for (const e of events) {
+  setTimeout(e.run, e.at);
+}
+
+// Expose total count so the bench can sanity-check
+window.__rrwebLikeEventCount = events.length;
+</script>
+</body>
+</html>
