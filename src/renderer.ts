@@ -108,19 +108,18 @@ export class Renderer {
    * Advance virtual time by the given number of milliseconds.
    * Steps in ~16ms increments (matching browser's native 60fps RAF rate)
    * so accumulated animations (trails, physics) render correctly.
+   *
+   * Uses raw CDP Runtime.evaluate instead of page.evaluate — the
+   * Playwright/Puppeteer abstraction serializes args and installs a
+   * binding per call, which costs ~1-2ms we don't need.
    */
   async advance(ms: number): Promise<void> {
-    await this.page.evaluate(
-      (opts: { ms: number; step: number }) => {
-        let remaining = opts.ms
-        while (remaining > 0) {
-          const chunk = Math.min(remaining, opts.step)
-          ;(window as any).__virtualTime.advance(chunk)
-          remaining -= chunk
-        }
-      },
-      { ms, step: RAF_STEP_MS },
-    )
+    await this.cdp.send('Runtime.evaluate', {
+      expression:
+        `(()=>{let r=${ms | 0};while(r>0){const c=r<${RAF_STEP_MS}?r:${RAF_STEP_MS};window.__virtualTime.advance(c);r-=c;}})()`,
+      returnByValue: false,
+      awaitPromise: false,
+    })
     this._elapsedMs += ms
   }
 
@@ -142,16 +141,16 @@ export class Renderer {
         buffer = await this._cdpScreenshot()
       }
     } else {
-      // CDP: Page.captureScreenshot (~33ms)
+      // CDP: Page.captureScreenshot
       buffer = await this._cdpScreenshot()
     }
 
-    const timestamp = await this.page.evaluate(
-      () => (window as any).__virtualTime.now(),
-    )
+    // Use locally-tracked elapsed time — exact match to __virtualTime.now()
+    // because advance() is the only thing that moves the clock. This saves
+    // a full CDP round-trip (~2ms) per captured frame.
     const frame: Frame = {
       data: buffer,
-      timestamp,
+      timestamp: this._elapsedMs,
       index: this._frameCount++,
     }
 
@@ -180,9 +179,14 @@ export class Renderer {
     return this
   }
 
-  /** Get current virtual time in ms (reads from browser). */
+  /**
+   * Current virtual time in ms.
+   * Returns the locally-tracked elapsed time — always equal to
+   * `window.__virtualTime.now()` because `advance()` is authoritative.
+   * Kept async for API compatibility with earlier versions.
+   */
   async currentTime(): Promise<number> {
-    return this.page.evaluate(() => (window as any).__virtualTime.now())
+    return this._elapsedMs
   }
 
   /** Detach CDP session. */

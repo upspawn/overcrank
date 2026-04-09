@@ -33,6 +33,10 @@ const BROWSER_ARGS = [
   '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
   '--disable-gpu', '--disable-software-rasterizer',
   '--force-device-scale-factor=1',
+  // Unpaces captureScreenshot from the 60Hz VSync cadence. On macOS this
+  // drops the capture floor from ~33ms to ~5ms (p50 ~16ms). Universally
+  // safe: we never want to wait for a real display refresh in headless.
+  '--disable-frame-rate-limit',
 ]
 
 const BEGIN_FRAME_ARGS = [
@@ -40,7 +44,6 @@ const BEGIN_FRAME_ARGS = [
   '--run-all-compositor-stages-before-draw',
   '--disable-threaded-animation',
   '--disable-threaded-scrolling',
-  '--disable-frame-rate-limit',
 ]
 
 /**
