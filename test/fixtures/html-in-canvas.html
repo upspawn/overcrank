@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #000; }
+  #card {
+    font-family: system-ui, sans-serif;
+    font-size: 36px;
+    font-weight: bold;
+    color: white;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    padding: 24px 36px;
+    border-radius: 16px;
+    width: fit-content;
+  }
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="360" layoutsubtree>
+  <div id="card">Frame 0</div>
+</canvas>
+<script>
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const card = document.getElementById('card');
+
+  window.__hasDrawElementImage = typeof ctx.drawElementImage === 'function';
+  window.__hasLayoutSubtree = canvas.hasAttribute('layoutsubtree');
+
+  function draw() {
+    ctx.clearRect(0, 0, 640, 360);
+    // Gradient background — canvas-native
+    const g = ctx.createLinearGradient(0, 0, 640, 360);
+    g.addColorStop(0, '#1a1a2e');
+    g.addColorStop(1, '#16213e');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 640, 360);
+    // HTML card via drawElementImage
+    try {
+      ctx.drawElementImage(card, 40, 40);
+      window.__drawErrors = 0;
+    } catch (e) {
+      window.__drawErrors = (window.__drawErrors || 0) + 1;
+      window.__lastDrawError = e.message;
+    }
+  }
+
+  // Paint event fires as part of the rendering pipeline and receives fresh snapshots.
+  canvas.addEventListener('paint', draw);
+
+  let frameIdx = 0;
+  function tick(t) {
+    frameIdx++;
+    const hue = Math.round((t / 10) % 360);
+    card.textContent = `Frame ${frameIdx} (t=${Math.round(t)}ms)`;
+    card.style.background = `linear-gradient(135deg, hsl(${hue}, 70%, 60%), hsl(${(hue + 60) % 360}, 70%, 50%))`;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  window.__getFrameIdx = () => frameIdx;
+  window.__getCardText = () => card.textContent;
+  window.__READY = true;
+</script>
+</body>
+</html>

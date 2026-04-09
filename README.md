@@ -221,6 +221,67 @@ Your code
               └── captureScreenshot    ← macOS: standard CDP (~33ms)
 ```
 
+## Experimental: HTML-in-Canvas (Chrome Canary)
+
+Chrome Canary ships an experimental [WICG proposal](https://github.com/WICG/html-in-canvas) — `drawElementImage()` — that rasterizes real HTML elements directly into a `<canvas>` buffer. Overcrank works with it out of the box: the virtual clock patches `paint` events and `requestAnimationFrame` the same way as before, and `Renderer` captures the canvas contents as part of the normal page screenshot.
+
+This unlocks HTML + WebGL + canvas 2D composed into a single captured buffer — the main use case overcrank was designed for.
+
+```typescript
+import { chromium } from 'playwright'
+import {
+  Renderer,
+  VIRTUAL_CLOCK_SCRIPT,
+  findChromeCanary,
+  CANARY_DRAW_ELEMENT_ARGS,
+} from 'overcrank'
+
+const canaryPath = findChromeCanary()
+if (!canaryPath) throw new Error('Install Chrome Canary')
+
+const browser = await chromium.launch({
+  executablePath: canaryPath,
+  args: [...CANARY_DRAW_ELEMENT_ARGS],
+})
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
+await page.goto('file:///your-html-in-canvas-page.html')
+
+const renderer = await Renderer.create(page)
+await renderer.advance(16)
+await renderer.capture() // prime compositor so an initial snapshot exists
+
+for (let t = 0; t < 10_000; t += 33) {
+  await renderer.advance(33)
+  await renderer.capture()
+}
+```
+
+Your page opts canvas children in with `layoutsubtree` and draws them during the `paint` event:
+
+```html
+<canvas id="c" width="1280" height="720" layoutsubtree>
+  <div id="label">Hello from HTML</div>
+</canvas>
+<script>
+  const canvas = document.getElementById('c')
+  const ctx = canvas.getContext('2d')
+  const label = document.getElementById('label')
+  canvas.addEventListener('paint', () => {
+    ctx.clearRect(0, 0, 1280, 720)
+    ctx.drawElementImage(label, 40, 40)
+  })
+</script>
+```
+
+**Constraints** (see the [WICG explainer](https://github.com/WICG/html-in-canvas)):
+- Chrome Canary only, behind `--enable-features=CanvasDrawElement`
+- Elements passed to `drawElementImage()` must be **direct children** of the `<canvas>`
+- CSS `transform` on source elements is ignored for drawing
+- WebGL/WebGPU equivalents: `texElementImage2D`, `copyElementImageToTexture`
+
+**Status**: experimental. The API can change or be removed at any time.
+
 ## Use cases
 
 - **CSS/Lottie animations → video** — render any web animation to MP4

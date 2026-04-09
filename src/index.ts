@@ -19,6 +19,11 @@ import type { RenderOptions, RenderStats } from './types'
 export { Renderer, createRenderer } from './renderer'
 export { VIRTUAL_CLOCK_SCRIPT } from './virtual-clock'
 export { checkFfmpeg, encodeFrames, stitchSegments } from './encoder'
+export {
+  findChromeCanary,
+  hasHtmlInCanvasSupport,
+  CANARY_DRAW_ELEMENT_ARGS,
+} from './canary'
 export type {
   RenderOptions, RenderStats, Frame, FrameHandler,
   FrameFormat, CDPPage, CDPSession,

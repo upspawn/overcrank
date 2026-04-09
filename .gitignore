@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.mp4
 examples/frames/
+experiments/html-in-canvas/frames/
+experiments/html-in-canvas/frames-ff/
