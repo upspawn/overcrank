@@ -1,5 +1,14 @@
 /**
- * Example: Render a CSS animation to video.
+ * Example: Render a JS-driven animation to video.
+ *
+ * NOTE: Despite the filename, this fixture's box uses a pure CSS @keyframes
+ * animation, which is a KNOWN-LIMITATION workload for overcrank — see the
+ * "Supported workloads" section in the README. The output will show the
+ * box sliding at wall-clock speed, desynced from the virtual-clock text
+ * label, because composited CSS animations run on a clock overcrank's
+ * in-page JS patching cannot reach.
+ *
+ * Kept around as the reference reproduction for that limitation.
  *
  * Run: bun examples/css-animation.ts
  */

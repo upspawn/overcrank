@@ -10,6 +10,23 @@ Overcrank patches the browser's time APIs (requestAnimationFrame, Date, setTimeo
 
 On Linux, overcrank auto-detects `chrome-headless-shell` and uses `HeadlessExperimental.beginFrame` — a single CDP call that forces the compositor to render and returns the screenshot inline. This is **2-3x faster** than standard CDP screenshots.
 
+## Supported workloads
+
+Overcrank drives a virtual **JavaScript** clock. Anything your page animates *through JavaScript* — `requestAnimationFrame`, `setTimeout`, `setInterval`, `Date.now()`, `performance.now()` — is captured correctly and can be rendered faster than real-time.
+
+**✅ Works correctly:**
+- Canvas 2D / WebGL / WebGPU driven by `requestAnimationFrame` (Three.js, PixiJS, D3, p5.js)
+- JS-driven DOM animations (GSAP, anime.js, framer-motion, React Spring)
+- Anything that reads `Date.now()` / `performance.now()` inside a RAF loop
+- `<video>` and Web Animations API *when driven from JS*
+- Lottie (JS-driven)
+- rrweb session replay
+
+**❌ Not currently supported — known-incorrect output:**
+- Pure CSS `@keyframes` and `transition` animations **without a JavaScript driver**. These run on the Chromium compositor thread, which reads its own `TimeTicks::Now` clock that overcrank's in-page JS patching cannot reach. The resulting video will show the CSS animation progressing at wall-clock speed — desynced from the captured JS clock — which visually manifests as animations running at the wrong speed (often much slower than they should) or looking frozen. If your page uses CSS keyframes, either (a) drive the timeline from JS via RAF, or (b) run animations on a canvas.
+
+This is a fundamental limitation of in-page time patching. Chromium's `Emulation.setVirtualTimePolicy` CDP API can reach the compositor clock, but it's experimental, has known hang bugs, and neither Playwright nor Puppeteer expose it — so we don't use it. See `experiments/notes-virtualtimepolicy.md` for the full research write-up.
+
 ## Performance
 
 Capture p50 on an M-series Mac with `LAUNCH_ARGS` + JPEG q80 on a pure-RAF canvas fixture:
@@ -302,12 +319,14 @@ Your page opts canvas children in with `layoutsubtree` and draws them during the
 
 ## Use cases
 
-- **CSS/Lottie animations → video** — render any web animation to MP4
-- **Web presentations → video** — Reveal.js, Slidev slides
-- **Canvas/WebGL → video** — Three.js scenes, D3 visualizations
+- **Canvas/WebGL → video** — Three.js scenes, D3 visualizations, Pixi games
+- **JS-driven animations → video** — GSAP, anime.js, framer-motion, Lottie (JS mode)
 - **Session replay → video** — rrweb recordings (what we built this for)
 - **Social media generators** — template pages with dynamic data
 - **Visual regression** — deterministic video captures for testing
+- **Web presentations → video** — as long as animations run through JS/RAF
+
+Note: pure CSS `@keyframes` / `transition` animations without a JS driver are **not** currently supported — see [Supported workloads](#supported-workloads).
 
 ## License
 

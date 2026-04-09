@@ -368,8 +368,10 @@ Our RAF-based virtual clock correctly flushes JavaScript-driven animations
 threaded animations run on a separate compositor clock that we can't
 patch from the page.
 
-**Correctness is preserved** (animation frames reflect virtual time — Blink
-recomputes CSS animation values on each tick), but **capture is paced**.
+**Correctness is NOT preserved** (retracted from earlier draft — see section
+"2026-04-09 — CSS cap is a correctness bug" below). The CSS animation in the
+output video plays at **wall-clock speed**, not virtual-clock speed, because
+Blink does **not** drive composited CSS animations from our patched JS clock.
 
 **Potential fix (not yet implemented):** switch to Chromium's native
 `Emulation.setVirtualTimePolicy` with `pauseIfNetworkFetchesPending` policy.
@@ -393,3 +395,127 @@ likely give us the ~1ms floor on CSS-animation pages. Deferred for investigation
 - `Emulation.setVirtualTimePolicy` as a replacement / complement to the
   RAF virtual clock, specifically to fix the CSS-animation capture ceiling.
   If it works, we could drop ~15ms per frame on DOM-heavy pages.
+
+---
+
+## 2026-04-09 — CSS cap is a correctness bug, not just a perf issue
+
+### Visual verification triggered a reframe
+
+Wrote `experiments/verify-output.mjs` to end-to-end-render the two canonical
+fixtures through `render()` and actually *look* at the resulting MP4s (not just
+measure capture cost). Previous findings focused on wall-clock per-frame time
+and took "animation frames reflect virtual time" on faith. They shouldn't
+have.
+
+**CSS @keyframes fixture (`animation.html`)** — 1280×720, 4s duration,
+30fps. Fixture: 100×100 red box, `animation: slide 2s linear infinite`, plus
+a RAF-driven text label showing the virtual timer.
+
+Extracted 4 frames at 1s intervals:
+
+| Output timestamp | Text label (JS) | Box position | Expected (2s period) |
+|---|---|---|---|
+| frame-01 (~0.43s) | `0.433s` | ~12% across | ~22% (21% into loop 1) |
+| frame-02 (~1.43s) | `1.433s` | ~37% across | ~72% (72% into loop 1) |
+| frame-03 (~2.43s) | `2.433s` | ~65% across | ~22% (21% into loop 2) |
+| frame-04 (~3.43s) | `3.433s` | ~90% across | ~72% (72% into loop 2) |
+
+The box sweeps **monotonically left-to-right across the full 4-second
+video** — a single slow sweep, not two full loops. The JS timer label (driven
+through patched RAF) progresses correctly. The compositor-driven box does
+not. **Text and box are reading different clocks.**
+
+### Why this is worse than "slow"
+
+The Tier 3 notes claimed "correctness is preserved, capture is paced." That
+was wrong. Composited CSS animations and transitions run on the compositor
+thread, which reads its own `base::TimeTicks::Now()` derived from real wall
+clock. Our virtual clock patches:
+
+- `Date.now`, `performance.now` — **JavaScript only**
+- `requestAnimationFrame` — **flushes callbacks on advance(), but the
+  underlying compositor tick for composited props (transform, opacity,
+  filter, clip-path, `@keyframes` with hardware-accelerated properties) is
+  not rescheduled**
+
+So when overcrank calls `renderer.advance(33)` and then `renderer.capture()`,
+the captured frame contains:
+- **JS-updated DOM state** at virtual time `t + 33ms` (correct)
+- **Compositor-layer visuals** at wall-clock time `≈ t_wall` (wrong —
+  independent of virtual time)
+
+For a 4s-long render that took 3.35s wall clock, the box only completes
+~1 (instead of 2) loops of the `2s linear infinite` animation. The speed
+distortion is ~50%. For pages that render slower than real-time (big viewports),
+CSS animations would appear *faster* than they should.
+
+### What this means for overcrank users
+
+This isn't a latent edge case — it's the advertised "render CSS animations
+to video" use case, and it's broken. If your page's visual timeline depends
+on composited CSS animations, **overcrank currently produces wrong output**.
+The README overstated supported workloads.
+
+### Affected workloads
+
+Pages whose visual state depends on **any of these** are affected:
+- `@keyframes` on transform / opacity / filter / clip-path (composited props)
+- CSS `transition` triggered by JS class changes
+- `animation-delay` driving staggered motion
+- SVG SMIL (maybe — not tested)
+
+Pages **not affected** (correct output):
+- Canvas 2D / WebGL content drawn from RAF (canvas-raf fixture verified:
+  frame indices advance cleanly F39 → F129 → F219 → F309 at 90 RAF ticks per
+  playback second, circle position and color update every frame)
+- GSAP / anime.js / framer-motion / any library that manipulates styles via
+  JS every frame (because those libraries call `setProperty` in a RAF loop,
+  which *is* driven by our virtual clock)
+- Lottie in JS playback mode
+
+### Actions taken
+
+1. **README reframed.** Added a prominent "Supported workloads" section
+   before Performance that explicitly calls out the CSS `@keyframes` limitation
+   as "known-incorrect output, not just slower". Removed "CSS/Lottie animations
+   → video" from the use-case list; replaced with "JS-driven animations → video".
+2. **`examples/css-animation.ts`** annotated as the reference reproduction
+   of the bug rather than an advertised example.
+3. **Retracted** the earlier "correctness is preserved" claim in the Tier 3
+   CSS compositor cap note above.
+
+### What we now know the fix *must* do
+
+Any real fix needs to reach the compositor clock, not just the JS clock.
+Options in decreasing order of likely feasibility:
+1. **`Emulation.setVirtualTimePolicy`** — overrides `TimeTicks::Now` at the
+   platform base, which is what Blink's animation clock reads. The research
+   in `notes-virtualtimepolicy.md` confirms this should freeze composited
+   CSS animations. The initial benchmark attempt hung on `animation.html`'s
+   RAF loop; needs retry with lower `maxVirtualTimeTaskStarvationCount` and
+   a JS-free pure-CSS fixture. **Most promising.**
+2. **`--blink-settings=acceleratedAnimationEnabled=false`** — forces all
+   animations off the compositor onto the main thread. Tried in
+   `bench-animation-fixture.mjs` and did **not** break the 17ms cap — the
+   main thread is apparently also paced when the compositor still has the
+   BeginMainFrame loop running. Dead end on its own.
+3. **Combine #1 + `HeadlessExperimental.beginFrame`** — Linux only. With
+   virtual time paused and manual frame production, this is the
+   Chromium-web-tests pattern and should give the 1ms floor. Not useful on
+   macOS.
+4. **Document as unsupported** — worst outcome; ships a correctness bug as a
+   feature.
+
+### Recommended path forward (2026-04-09)
+
+1. Ship 0.4.0 with honest docs (canvas + JS workloads, known CSS limitation).
+2. Post-release, retry `setVirtualTimePolicy` with:
+   - Pure-CSS fixture (zero JS, zero RAF) — removes the known hang cause
+   - `maxVirtualTimeTaskStarvationCount: 10` (1000 was too permissive)
+   - Correctness verification: re-run `verify-output.mjs` on the fixture
+   - If it works, add opt-in `renderer.useCdpVirtualTime()` mode for
+     CSS-animation pages, keeping the IIFE clock as the default for everything
+     else (Playwright's precedent — `page.clock` for the common case).
+3. If `setVirtualTimePolicy` can't be made reliable, document the limitation
+   permanently and recommend JS-driven animation libraries.
