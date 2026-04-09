@@ -115,6 +115,22 @@ const renderer = await Renderer.create(page)
 renderer.setFormat('png')  // lossless, larger files, slower capture
 ```
 
+**Canvas-target mode (fast path for canvas-based scenes):**
+```typescript
+const renderer = await Renderer.create(page)
+renderer.setCanvasTarget('#scene')  // 10x+ faster than captureScreenshot
+```
+
+When your content is drawn into a single `<canvas>` from a `requestAnimationFrame`
+loop (Three.js, PixiJS, canvas 2D), point the renderer at that canvas and it'll
+read pixels via `canvas.toDataURL()` inside the page — bypassing the compositor
+and its VSync pacing. On macOS this drops capture p50 from ~16ms to ~0.9ms
+(**>400x** real-time speedup at `step=500ms` vs ~30x through `captureScreenshot`).
+
+Not for html-in-canvas `paint`-event workloads (`layoutsubtree` +
+`drawElementImage`) — those require a real compositor paint to produce fresh
+element snapshots, which only the default backend triggers.
+
 ## Variable framerate
 
 Instead of fixed FPS, capture at specific timestamps:
@@ -165,6 +181,7 @@ const renderer = await Renderer.create(page)
 **Config (chainable):**
 - `renderer.setQuality(n)` — JPEG quality 1-100
 - `renderer.setFormat('jpeg' | 'png')` — screenshot format
+- `renderer.setCanvasTarget(selector | null)` — opt into the in-page canvas backend (see above)
 
 **Actions:**
 - `renderer.advance(ms)` — advance virtual time (steps at 16ms to match 60fps RAF)

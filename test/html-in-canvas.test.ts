@@ -84,6 +84,84 @@ describeIfCanary('html-in-canvas (Chrome Canary)', () => {
       await browser.close()
     }
   }, 60_000)
+
+})
+
+const CANVAS_RAF_FIXTURE = `file://${join(import.meta.dir, 'fixtures', 'canvas-raf.html')}`
+
+describe('setCanvasTarget in-page capture backend', () => {
+  test('captures fresh pixels every frame for a RAF-drawing canvas', async () => {
+    // Works without Canary — this backend uses only stock Chromium APIs.
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage({ viewport: { width: 400, height: 240 } })
+      await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
+      await page.goto(CANVAS_RAF_FIXTURE, { waitUntil: 'domcontentloaded' })
+      await page.waitForFunction(() => (window as any).__READY === true)
+
+      const renderer = await Renderer.create(page)
+      renderer.setQuality(80).setFormat('jpeg').setCanvasTarget('#scene')
+
+      // Prime a RAF tick so the canvas has initial content
+      await renderer.advance(16)
+      const primeFrame = await renderer.capture()
+      expect(primeFrame.data[0]).toBe(0xff) // JPEG SOI
+      expect(primeFrame.data[1]).toBe(0xd8)
+      expect(primeFrame.data.length).toBeGreaterThan(500)
+
+      // Capture 5 frames with large step so the animation moves visibly
+      const midHashes = new Set<number>()
+      for (let i = 0; i < 5; i++) {
+        await renderer.advance(200)
+        const f = await renderer.capture()
+        expect(f.data[0]).toBe(0xff)
+        expect(f.data[1]).toBe(0xd8)
+        const mid = Math.floor(f.data.length / 2)
+        let h = 0
+        for (let k = 0; k < 256 && mid + k < f.data.length; k++) {
+          h = ((h * 31 + f.data[mid + k]!) >>> 0)
+        }
+        midHashes.add(h)
+      }
+      // All 5 mid-buffer hashes unique → toDataURL returned fresh pixels
+      expect(midHashes.size).toBe(5)
+
+      // Virtual time tracked locally (no roundtrip read)
+      expect(renderer.elapsedMs).toBeGreaterThanOrEqual(1000 + 16)
+
+      // Disabling the target falls back to captureScreenshot
+      renderer.setCanvasTarget(null)
+      await renderer.advance(16)
+      const fallback = await renderer.capture()
+      expect(fallback.data[0]).toBe(0xff) // JPEG
+      expect(fallback.data.length).toBeGreaterThan(500)
+
+      await renderer.close()
+    } finally {
+      await browser.close()
+    }
+  }, 60_000)
+
+  test('throws a clear error when selector points at a non-canvas element', async () => {
+    const browser = await chromium.launch({ headless: true })
+    try {
+      const page = await browser.newPage({ viewport: { width: 320, height: 200 } })
+      await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
+      await page.goto(CANVAS_RAF_FIXTURE, { waitUntil: 'domcontentloaded' })
+      await page.waitForFunction(() => (window as any).__READY === true)
+
+      const renderer = await Renderer.create(page)
+      // body exists but is not a canvas — toDataURL is not a function on it
+      renderer.setCanvasTarget('body')
+
+      await renderer.advance(16)
+      await expect(renderer.capture()).rejects.toThrow()
+
+      await renderer.close()
+    } finally {
+      await browser.close()
+    }
+  }, 60_000)
 })
 
 // Always run: resolver smoke test — exercise the module on every platform.

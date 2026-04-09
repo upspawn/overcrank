@@ -1,11 +1,15 @@
 /**
  * Core renderer — advance virtual time + capture screenshots.
  *
- * Two capture backends:
- * - CDP: Page.captureScreenshot (works everywhere, ~33ms/frame)
- * - beginFrame: HeadlessExperimental.beginFrame (Linux chrome-headless-shell, ~13ms/frame)
- *
- * The renderer auto-detects beginFrame support and uses it when available.
+ * Three capture backends, in descending priority:
+ *  1. Canvas (opt-in via setCanvasTarget): canvas.toDataURL inside the page.
+ *     Bypasses the compositor entirely — ~5ms/frame on macOS, ~4x faster
+ *     than captureScreenshot. Only works if your entire visual output is
+ *     drawn into a single canvas (html-in-canvas, Three.js, etc.).
+ *  2. beginFrame: HeadlessExperimental.beginFrame (Linux chrome-headless-shell,
+ *     ~13ms/frame). Auto-detected on launch.
+ *  3. CDP: Page.captureScreenshot (universal, ~5ms/frame with
+ *     --disable-frame-rate-limit on macOS; falls back to ~16–33ms without it).
  */
 
 import type { CDPPage, CDPSession, Frame, FrameFormat, FrameHandler } from './types'
@@ -43,6 +47,8 @@ export class Renderer {
   private _format: FrameFormat = 'jpeg'
   private _useBeginFrame = false
   private _frameTimeTicks = 0
+  private _canvasSelector: string | null = null
+  private _canvasExpr: string | null = null
 
   private constructor(page: CDPPage, cdp: CDPSession) {
     this.page = page
@@ -76,13 +82,58 @@ export class Renderer {
   /** Set JPEG quality (1-100). Default: 80. */
   setQuality(quality: number): this {
     this._quality = quality
+    this._rebuildCanvasExpr()
     return this
   }
 
   /** Set screenshot format ('jpeg' or 'png'). Default: 'jpeg'. */
   setFormat(format: FrameFormat): this {
     this._format = format
+    this._rebuildCanvasExpr()
     return this
+  }
+
+  /**
+   * Opt into the in-page canvas capture backend.
+   *
+   * When a selector is set, `capture()` reads pixels via
+   * `canvas.toDataURL()` inside the page instead of going through
+   * `Page.captureScreenshot`. This skips the compositor entirely — on
+   * macOS, capture p50 drops from ~16ms to ~4ms (~4x faster).
+   *
+   * **Use this when your content is drawn to a `<canvas>` from a
+   * `requestAnimationFrame` loop** — Three.js, PixiJS, hand-rolled canvas
+   * 2D, etc. Overcrank flushes RAF as part of `advance()`, so by the
+   * time `capture()` runs, the canvas backing store is already fresh.
+   *
+   * **Do NOT use this for html-in-canvas `paint`-event workloads** (with
+   * `layoutsubtree` + `drawElementImage`). Those require a real
+   * compositor paint to produce fresh element snapshots — which only
+   * `Page.captureScreenshot` / `beginFrame` trigger. Stick with the
+   * default backend for those pages.
+   *
+   * Pass `null` to disable and fall back to captureScreenshot / beginFrame.
+   *
+   * ```ts
+   * renderer.setCanvasTarget('#scene')
+   * ```
+   */
+  setCanvasTarget(selector: string | null): this {
+    this._canvasSelector = selector
+    this._rebuildCanvasExpr()
+    return this
+  }
+
+  /** Pre-build the in-page capture expression once — avoids per-frame string work. */
+  private _rebuildCanvasExpr(): void {
+    if (!this._canvasSelector) {
+      this._canvasExpr = null
+      return
+    }
+    const sel = JSON.stringify(this._canvasSelector)
+    const mime = this._format === 'png' ? "'image/png'" : "'image/jpeg'"
+    const qArg = this._format === 'jpeg' ? `,${this._quality / 100}` : ''
+    this._canvasExpr = `document.querySelector(${sel}).toDataURL(${mime}${qArg})`
   }
 
   // --- State ---
@@ -127,7 +178,10 @@ export class Renderer {
   async capture(): Promise<Frame> {
     let buffer: Buffer
 
-    if (this._useBeginFrame) {
+    if (this._canvasExpr) {
+      // In-page canvas backend — skips the compositor (~5ms on macOS).
+      buffer = await this._canvasCapture()
+    } else if (this._useBeginFrame) {
       // beginFrame: force composite + screenshot in one CDP call (~13ms)
       this._frameTimeTicks += 16000
       const result = await this.cdp.send('HeadlessExperimental.beginFrame', {
@@ -171,6 +225,37 @@ export class Renderer {
     }
     const { data } = await this.cdp.send('Page.captureScreenshot', params)
     return Buffer.from(data as string, 'base64')
+  }
+
+  /**
+   * In-page canvas backend — pulls pixels via `canvas.toDataURL()` inside
+   * the page. Much faster than captureScreenshot because it reads the
+   * canvas backing store directly instead of waiting for a VSync-paced
+   * compositor present.
+   */
+  private async _canvasCapture(): Promise<Buffer> {
+    const { result, exceptionDetails } = await this.cdp.send('Runtime.evaluate', {
+      expression: this._canvasExpr!,
+      returnByValue: true,
+      awaitPromise: false,
+    })
+    if (exceptionDetails) {
+      throw new Error(
+        `canvas capture failed for selector ${JSON.stringify(this._canvasSelector)}: ` +
+          (exceptionDetails.exception?.description ??
+            exceptionDetails.text ??
+            'canvas.toDataURL() threw'),
+      )
+    }
+    const dataUrl = result.value as string
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+      throw new Error(
+        `canvas capture: selector ${JSON.stringify(this._canvasSelector)} ` +
+          `did not match a <canvas> element`,
+      )
+    }
+    const comma = dataUrl.indexOf(',')
+    return Buffer.from(dataUrl.slice(comma + 1), 'base64')
   }
 
   /** Register a callback for each captured frame. */
