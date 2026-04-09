@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { Renderer, createRenderer } from '../src/renderer'
-import { render } from '../src/index'
+import { render, LAUNCH_ARGS } from '../src/index'
 import { chromium } from 'playwright'
 import { VIRTUAL_CLOCK_SCRIPT } from '../src/virtual-clock'
 import { existsSync } from 'node:fs'
@@ -11,7 +11,7 @@ const FIXTURE_PATH = join(import.meta.dir, 'fixtures', 'animation.html')
 
 describe('Renderer class', () => {
   test('captures frames and tracks state', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage({ viewport: { width: 640, height: 480 } })
 
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
@@ -42,7 +42,7 @@ describe('Renderer class', () => {
   }, 30_000)
 
   test('chainable config methods', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage({ viewport: { width: 320, height: 240 } })
 
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
@@ -66,7 +66,7 @@ describe('Renderer class', () => {
   }, 30_000)
 
   test('onFrame is chainable', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage({ viewport: { width: 320, height: 240 } })
 
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
@@ -92,7 +92,7 @@ describe('Renderer class', () => {
 
 describe('createRenderer() backward compat', () => {
   test('captures frames from a page', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage({ viewport: { width: 640, height: 480 } })
 
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
@@ -121,7 +121,7 @@ describe('createRenderer() backward compat', () => {
   }, 30_000)
 
   test('advance moves virtual time correctly', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage({ viewport: { width: 320, height: 240 } })
 
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)

@@ -2,13 +2,14 @@ import { describe, test, expect } from 'bun:test'
 import puppeteer from 'puppeteer'
 import { createRenderer } from '../src/renderer'
 import { VIRTUAL_CLOCK_SCRIPT } from '../src/virtual-clock'
+import { LAUNCH_ARGS } from '../src/index'
 import { join } from 'node:path'
 
 const FIXTURE_PATH = join(import.meta.dir, 'fixtures', 'animation.html')
 
 describe('puppeteer support', () => {
   test('createRenderer works with a Puppeteer page', async () => {
-    const browser = await puppeteer.launch({ headless: true })
+    const browser = await puppeteer.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage()
     await page.setViewport({ width: 640, height: 480 })
 
@@ -39,7 +40,7 @@ describe('puppeteer support', () => {
   }, 30_000)
 
   test('virtual time advances correctly via Puppeteer', async () => {
-    const browser = await puppeteer.launch({ headless: true })
+    const browser = await puppeteer.launch({ headless: true, args: [...LAUNCH_ARGS] })
     const page = await browser.newPage()
 
     await page.evaluateOnNewDocument(VIRTUAL_CLOCK_SCRIPT)

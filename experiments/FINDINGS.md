@@ -244,3 +244,152 @@ Next thing worth trying for further speedup: **Runtime.addBinding**
 + `bindingCalled` events to stream frames out of the page without a
 CDP round-trip per frame. This is the batched in-page path from the
 bench — proven to work for pure RAF-canvas workloads.
+
+---
+
+## 2026-04-09 — Tier 3 investigation + LAUNCH_ARGS footgun discovery
+
+### Batched streaming doesn't justify a new API (`bench-tier3.mjs`)
+
+Tested batched in-page capture on `canvas-raf.html` (400×240, step=500ms,
+80 frames) to see if collapsing N frames into one CDP round-trip could
+beat the current Tier 2 ceiling.
+
+| Path | cap p50 | speedup |
+|---|---|---|
+| A) baseline Renderer (frame-by-frame) | 0.89ms | 409× |
+| B) combined `advance + toDataURL` in 1 eval | 1.12ms | 433× |
+| C batch=5 — array return | 0.99ms | 503× |
+| C batch=10 — array return | 0.98ms | 514× |
+| C batch=40 — array return | 0.96ms | 523× |
+| D batch=5 — addBinding stream | 0.99ms | 503× |
+| D batch=40 — addBinding stream | 0.95ms | 529× |
+| E advance-only floor (no capture) | 0.61ms | 778× |
+
+Key finding: **batching only gets us from 409× → 528× (29% improvement).**
+The per-frame cost is dominated by `canvas.toDataURL()` JPEG encode inside
+the page (~0.35ms), not CDP round-trips. Advance-only floor is 0.61ms;
+capture adds ~0.34ms on top. `Runtime.addBinding` streaming gives ~1%
+improvement over returning an array — both are in-page cost bound.
+
+**Decision: ship nothing.** A new `captureBatch` API would complicate the
+surface for a 20% win on an already 400× baseline. Not worth it.
+
+### ❗ LAUNCH_ARGS footgun (the real Tier 3 win)
+
+**Investigation started here:** the prior FINDINGS entry claimed Canary
+`captureScreenshot` at 5ms p50 vs stock Playwright Chromium at 16ms p50 on
+macOS — and I suspected a Playwright launch-args mismatch.
+
+**Inspected Playwright's actual child process** with `ps`:
+- Playwright on macOS already uses `chrome-headless-shell` (the same binary
+  we only detected on Linux for `beginFrame`). Path:
+  `~/Library/Caches/ms-playwright/chromium_headless_shell-*/...`
+- Our `BROWSER_ARGS` (when passed) DO land on the command line intact,
+  including `--disable-frame-rate-limit`.
+- Using `--headless` (legacy), which is expected for chrome-headless-shell.
+
+**Attempted `HeadlessExperimental.beginFrame` on macOS chrome-headless-shell:**
+- `--enable-begin-frame-control` alone: accepted, but `beginFrame` still fails
+  at runtime. `usesBeginFrame` stays false.
+- Full `BEGIN_FRAME_ARGS` (adds `--run-all-compositor-stages-before-draw`,
+  `--disable-threaded-animation`, etc): **crashes the page** with
+  `Target page, context or browser has been closed`. This flag combination
+  hangs or kills chrome-headless-shell on macOS.
+- Conclusion: **beginFrame is Linux-only** even though the binary is the
+  same. Some compositor code path is Linux-specific.
+
+### Viewport sweep (`bench-viewport-sizes.mjs`)
+
+With all the right flags, re-measured captureScreenshot on `canvas-raf.html`
+across viewport sizes. This is what the **normal user on macOS** sees:
+
+| Viewport | Pixels | captureScreenshot p50 | canvas-target p50 | Canvas advantage |
+|---|---|---|---|---|
+| 400×240   | 96K    | 0.89ms | 0.62ms | 1.4× |
+| 800×600   | 480K   | 1.90ms | 0.68ms | 2.8× |
+| 1280×720  | 921K   | 3.12ms | 0.63ms | 5.0× |
+| 1920×1080 | 2073K  | 6.01ms | 0.63ms | 9.5× |
+
+**captureScreenshot scales linearly with pixel count** (~3ns/pixel on M-series).
+canvas-target is bound by the canvas size (400×240 here), so its cost is
+**constant regardless of viewport** — making it dominant for small-canvas-in-
+big-viewport scenes (dashboards, hero animations).
+
+### ❌ The 16ms bench result in Tier 2 was a benchmarker bug
+
+Rerun of the exact same `bench-canvas-backend.mjs` shows 16ms for captureScreenshot
+at 400×240 — reproducible. But the new `bench-viewport-sizes.mjs` shows 0.89ms
+for the same operation with the same viewport. The difference?
+
+**`bench-canvas-backend.mjs` launched with `chromium.launch({ headless: true })`
+— no `args` array. So `--disable-frame-rate-limit` was NEVER applied.**
+
+This was a bench-only issue. But it reveals a real user-facing problem:
+**users of the `Renderer.create(page)` low-level API are responsible for
+launching the browser themselves, and if they forget the flags, they silently
+hit the VSync floor.** No warning, no indication — just 10–20× slower than
+they could be.
+
+### Fix: export `LAUNCH_ARGS` + runtime probe warning
+
+1. **Exported `LAUNCH_ARGS`** from `src/index.ts` as a named readonly constant.
+   Users doing manual launch can `chromium.launch({ args: [...LAUNCH_ARGS] })`.
+2. **Runtime detection** in `Renderer._cdpScreenshot()`: sample the first
+   5 `captureScreenshot` durations, and if the **min** is ≥ 12ms, the
+   browser is almost certainly missing `--disable-frame-rate-limit`. Warn
+   once per process with a copy-pasteable fix.
+   - Use `min` (not median or mean) to avoid false positives from cold-start
+     warmup, which commonly takes ~10–20ms on the first frame regardless.
+3. **Documented in README**: launch args section with a warning callout,
+   updated performance table with real viewport-sweep numbers.
+
+### ❗ Compositor-paced ceiling on CSS keyframe pages (`bench-animation-fixture.mjs`)
+
+Discovered while testing the probe: `test/fixtures/animation.html` (which
+uses CSS `@keyframes animation: slide 2s linear infinite`) captures at
+**17ms/frame regardless of flags**, even with full LAUNCH_ARGS. On the
+same viewport (640×480), canvas-raf.html captures at 1.44ms — a 12× gap.
+
+Flags tried, none moved the needle:
+- `--disable-threaded-animation`
+- `--disable-threaded-scrolling`
+- `--disable-background-timer-throttling`
+- `--disable-renderer-backgrounding`
+- `--disable-backgrounding-occluded-windows`
+- `--disable-checker-imaging`
+- `--blink-settings=acceleratedAnimationEnabled=false`
+
+**Hypothesis:** when a CSS animation is running, the compositor thread is
+independently ticking and `Page.captureScreenshot` waits for the next
+commit — coupled to the real display refresh rate, not our virtual clock.
+Our RAF-based virtual clock correctly flushes JavaScript-driven animations
+(that's why canvas-raf renders each frame's state correctly), but CSS
+threaded animations run on a separate compositor clock that we can't
+patch from the page.
+
+**Correctness is preserved** (animation frames reflect virtual time — Blink
+recomputes CSS animation values on each tick), but **capture is paced**.
+
+**Potential fix (not yet implemented):** switch to Chromium's native
+`Emulation.setVirtualTimePolicy` with `pauseIfNetworkFetchesPending` policy.
+This integrates at the Chromium scheduler level — it pauses CSS animations,
+RAF, setTimeout, setInterval, and the compositor tick all together. Advance
+via `Emulation.setVirtualTimePolicy(policy='advance', budget=Nms)`. Would
+likely give us the ~1ms floor on CSS-animation pages. Deferred for investigation.
+
+### Tier 3 conclusion
+
+**Ship:**
+- `LAUNCH_ARGS` export + runtime probe warning (closes a silent 10–20x
+  footgun for low-level API users)
+- Updated README with real performance numbers and launch-args documentation
+- Updated viewport-sweep benchmarks
+
+**Don't ship:**
+- Batched in-page capture API (29% win, new surface area — not worth it)
+
+**Next investigation:**
+- `Emulation.setVirtualTimePolicy` as a replacement / complement to the
+  RAF virtual clock, specifically to fix the CSS-animation capture ceiling.
+  If it works, we could drop ~15ms per frame on DOM-heavy pages.

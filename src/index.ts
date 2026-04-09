@@ -29,15 +29,30 @@ export type {
   FrameFormat, CDPPage, CDPSession,
 } from './types'
 
-const BROWSER_ARGS = [
+/**
+ * Browser launch args overcrank needs for maximum capture speed.
+ *
+ * **If you call `Renderer.create(page)` directly, you MUST pass these to
+ * `chromium.launch({ args: [...LAUNCH_ARGS] })`** — otherwise
+ * `Page.captureScreenshot` is paced to the 60Hz VSync cadence and capture
+ * runs at ~16ms/frame instead of ~1–6ms/frame (a ~10–20x difference at
+ * 1920×1080 on macOS).
+ *
+ * The high-level `render()` API passes these for you automatically.
+ */
+export const LAUNCH_ARGS: readonly string[] = [
   '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
   '--disable-gpu', '--disable-software-rasterizer',
   '--force-device-scale-factor=1',
-  // Unpaces captureScreenshot from the 60Hz VSync cadence. On macOS this
-  // drops the capture floor from ~33ms to ~5ms (p50 ~16ms). Universally
-  // safe: we never want to wait for a real display refresh in headless.
+  // Unpaces captureScreenshot from the 60Hz VSync cadence. Without this
+  // flag, capture p50 floors at ~16ms on macOS regardless of viewport size;
+  // with it, we run at the true GPU/encode cost (~1ms at 400×240,
+  // ~6ms at 1920×1080). Universally safe — we never want to wait for a real
+  // display refresh in headless rendering.
   '--disable-frame-rate-limit',
 ]
+
+const BROWSER_ARGS = LAUNCH_ARGS
 
 const BEGIN_FRAME_ARGS = [
   '--enable-begin-frame-control',
@@ -108,7 +123,7 @@ export async function render(
       }
     : {
         headless: true as const,
-        args: BROWSER_ARGS,
+        args: [...BROWSER_ARGS],
       }
 
   const ext = format === 'png' ? 'png' : 'jpg'

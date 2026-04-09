@@ -12,19 +12,18 @@ On Linux, overcrank auto-detects `chrome-headless-shell` and uses `HeadlessExper
 
 ## Performance
 
-| Platform | Method | Speed | Any HTML? |
-|----------|--------|-------|-----------|
-| Linux | `beginFrame` + `--disable-frame-rate-limit` | **~78 fps** (5.5ms/frame) | Yes |
-| Linux | `beginFrame` (default) | ~60 fps (13ms/frame) | Yes |
-| macOS | `Page.captureScreenshot` | ~30 fps (33ms/frame) | Yes |
+Capture p50 on an M-series Mac with `LAUNCH_ARGS` + JPEG q80 on a pure-RAF canvas fixture:
 
-Combine with lower FPS for faster-than-real-time rendering:
+| Backend | 400×240 | 800×600 | 1280×720 | 1920×1080 |
+|---|---|---|---|---|
+| `canvas.toDataURL` (`setCanvasTarget`) | **~0.6ms** | **~0.7ms** | **~0.6ms** | **~0.6ms** |
+| `Page.captureScreenshot` (default, macOS) | ~0.9ms | ~1.9ms | ~3.1ms | ~6.0ms |
+| `beginFrame` (Linux chrome-headless-shell) | ~5ms | ~5ms | ~5ms | ~5ms |
+| Same, without `--disable-frame-rate-limit` (silent footgun) | ~8ms | ~16ms | ~16ms | ~16ms |
 
-| Output FPS | Linux | macOS |
-|------------|-------|-------|
-| 30 fps | 2.6x real-time | 1x |
-| 10 fps | 7.8x real-time | 3x |
-| 5 fps | 15x real-time | 6x |
+The canvas-target backend's cost is bound by the canvas size (not the viewport), so it scales best for small-canvas-in-big-viewport scenes (WebGL dashboards, hero animations).
+
+Combine a fast backend with a large virtual-time step for faster-than-real-time rendering. At step=500ms on macOS, canvas-target hits **~590×** real-time and `captureScreenshot` at 1920×1080 hits **~77×**.
 
 ## Install
 
@@ -61,12 +60,14 @@ console.log(`${stats.frames} frames, ${stats.speedup}x real-time`)
 
 Works with both Playwright and Puppeteer — just pass your page object. On Linux with `chrome-headless-shell`, `Renderer.create()` auto-detects and uses `beginFrame` for faster capture.
 
+> **⚠ Launch args matter.** Pass `LAUNCH_ARGS` to `chromium.launch` — without `--disable-frame-rate-limit`, `Page.captureScreenshot` is paced to 60Hz VSync and runs at ~16ms/frame regardless of viewport size. With it, capture runs at the true GPU/encode cost (~1ms at 400×240, ~6ms at 1920×1080) — a 10–20x difference at larger sizes. The high-level `render()` API passes these for you. Renderer will log a warning if it detects VSync-paced capture.
+
 **Playwright:**
 ```typescript
-import { Renderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
+import { Renderer, VIRTUAL_CLOCK_SCRIPT, LAUNCH_ARGS } from 'overcrank'
 import { chromium } from 'playwright'
 
-const browser = await chromium.launch()
+const browser = await chromium.launch({ args: [...LAUNCH_ARGS] })
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
 await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
 await page.goto('https://my-animation.com')
@@ -96,10 +97,10 @@ await browser.close()
 
 **Puppeteer:**
 ```typescript
-import { Renderer, VIRTUAL_CLOCK_SCRIPT } from 'overcrank'
+import { Renderer, VIRTUAL_CLOCK_SCRIPT, LAUNCH_ARGS } from 'overcrank'
 import puppeteer from 'puppeteer'
 
-const browser = await puppeteer.launch()
+const browser = await puppeteer.launch({ args: [...LAUNCH_ARGS] })
 const page = await browser.newPage()
 await page.setViewport({ width: 1920, height: 1080 })
 await page.evaluateOnNewDocument(VIRTUAL_CLOCK_SCRIPT)

@@ -15,6 +15,7 @@ import {
   VIRTUAL_CLOCK_SCRIPT,
   findChromeCanary,
   CANARY_DRAW_ELEMENT_ARGS,
+  LAUNCH_ARGS,
 } from '../src/index'
 
 const FIXTURE = `file://${join(import.meta.dir, 'fixtures', 'html-in-canvas.html')}`
@@ -26,7 +27,7 @@ describeIfCanary('html-in-canvas (Chrome Canary)', () => {
     const browser = await chromium.launch({
       executablePath: canaryPath!,
       headless: true,
-      args: [...CANARY_DRAW_ELEMENT_ARGS],
+      args: [...LAUNCH_ARGS, ...CANARY_DRAW_ELEMENT_ARGS],
     })
 
     try {
@@ -92,7 +93,7 @@ const CANVAS_RAF_FIXTURE = `file://${join(import.meta.dir, 'fixtures', 'canvas-r
 describe('setCanvasTarget in-page capture backend', () => {
   test('captures fresh pixels every frame for a RAF-drawing canvas', async () => {
     // Works without Canary — this backend uses only stock Chromium APIs.
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     try {
       const page = await browser.newPage({ viewport: { width: 400, height: 240 } })
       await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)
@@ -143,7 +144,7 @@ describe('setCanvasTarget in-page capture backend', () => {
   }, 60_000)
 
   test('throws a clear error when selector points at a non-canvas element', async () => {
-    const browser = await chromium.launch({ headless: true })
+    const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] })
     try {
       const page = await browser.newPage({ viewport: { width: 320, height: 200 } })
       await page.addInitScript(VIRTUAL_CLOCK_SCRIPT)

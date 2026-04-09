@@ -37,6 +37,9 @@ async function openCDPSession(page: CDPPage): Promise<CDPSession> {
  * When available, capture is ~2x faster (composite + screenshot in one CDP call).
  * Falls back to `Page.captureScreenshot` on macOS or regular Chrome.
  */
+/** One-process-wide flag so we don't spam the slow-capture warning. */
+let _warnedVsyncPaced = false
+
 export class Renderer {
   private page: CDPPage
   private cdp: CDPSession
@@ -49,6 +52,9 @@ export class Renderer {
   private _frameTimeTicks = 0
   private _canvasSelector: string | null = null
   private _canvasExpr: string | null = null
+  // First few captureScreenshot durations — used to detect the VSync-paced
+  // floor (~16ms) and warn the user to pass LAUNCH_ARGS.
+  private _probeMs: number[] = []
 
   private constructor(page: CDPPage, cdp: CDPSession) {
     this.page = page
@@ -223,8 +229,34 @@ export class Renderer {
     if (this._format === 'jpeg') {
       params.quality = this._quality
     }
+    const t0 = performance.now()
     const { data } = await this.cdp.send('Page.captureScreenshot', params)
+    this._recordProbe(performance.now() - t0)
     return Buffer.from(data as string, 'base64')
+  }
+
+  /**
+   * Record the first few captureScreenshot durations to detect VSync-paced
+   * capture (the flag footgun). After 5 samples, if the MIN is still
+   * ≥ 12ms, every capture — including the fastest — is paced to the 60Hz
+   * VSync floor, which strongly implies the browser is missing
+   * `--disable-frame-rate-limit`. Using min (not median) avoids false
+   * positives from cold-start warmup. Warns once per process.
+   */
+  private _recordProbe(ms: number): void {
+    if (_warnedVsyncPaced || this._probeMs.length >= 5) return
+    this._probeMs.push(ms)
+    if (this._probeMs.length < 5) return
+    const min = Math.min(...this._probeMs)
+    if (min >= 12) {
+      _warnedVsyncPaced = true
+      console.warn(
+        `[overcrank] capture min ≈ ${min.toFixed(1)}ms — browser looks VSync-paced. ` +
+          `Launch Chromium with overcrank's LAUNCH_ARGS for ~10–20x faster capture:\n` +
+          `  import { LAUNCH_ARGS } from 'overcrank'\n` +
+          `  chromium.launch({ args: [...LAUNCH_ARGS] })`,
+      )
+    }
   }
 
   /**

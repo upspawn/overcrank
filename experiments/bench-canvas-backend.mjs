@@ -3,7 +3,7 @@
  * RAF-driven canvas workload. No Canary / html-in-canvas required.
  */
 import { chromium } from 'playwright';
-import { Renderer, VIRTUAL_CLOCK_SCRIPT } from '../src/index.ts';
+import { Renderer, VIRTUAL_CLOCK_SCRIPT, LAUNCH_ARGS } from '../src/index.ts';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -24,7 +24,7 @@ const STEP = 500;
 const FRAMES = 80;
 
 async function bench(label, { canvasTarget = null } = {}) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, args: [...LAUNCH_ARGS] });
   try {
     const page = await browser.newPage({ viewport: { width: 400, height: 240 } });
     await page.addInitScript(VIRTUAL_CLOCK_SCRIPT);
