@@ -1,6 +1,6 @@
 {
   "name": "overcrank",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Render any web page to video, faster than real-time",
   "type": "module",
   "main": "src/index.ts",
