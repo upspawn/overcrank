@@ -26,6 +26,8 @@ export {
   hasHtmlInCanvasSupport,
   CANARY_DRAW_ELEMENT_ARGS,
 } from './canary'
+// LAUNCH_ARGS, BEGIN_FRAME_ARGS, and findChromeHeadlessShell are defined in
+// this module and exported at their declaration site below.
 export type {
   RenderOptions, RenderStats, Frame, FrameHandler,
   FrameFormat, CDPPage, CDPSession,
@@ -57,7 +59,26 @@ export const LAUNCH_ARGS: readonly string[] = [
 
 const BROWSER_ARGS = LAUNCH_ARGS
 
-const BEGIN_FRAME_ARGS = [
+/**
+ * Browser launch args required to enable `HeadlessExperimental.beginFrame`.
+ *
+ * Pass these **in addition to `LAUNCH_ARGS`** when you launch
+ * `chrome-headless-shell` directly and want overcrank's Renderer to pick up
+ * the fast backend. The high-level `render()` API passes them automatically
+ * when it detects `chrome-headless-shell` on Linux.
+ *
+ * ```ts
+ * import { chromium } from 'playwright'
+ * import { LAUNCH_ARGS, BEGIN_FRAME_ARGS, findChromeHeadlessShell } from 'overcrank'
+ *
+ * const shellPath = findChromeHeadlessShell()
+ * const browser = await chromium.launch({
+ *   executablePath: shellPath ?? undefined,
+ *   args: [...LAUNCH_ARGS, ...(shellPath ? BEGIN_FRAME_ARGS : [])],
+ * })
+ * ```
+ */
+export const BEGIN_FRAME_ARGS: readonly string[] = [
   '--enable-begin-frame-control',
   '--run-all-compositor-stages-before-draw',
   '--disable-threaded-animation',
@@ -65,10 +86,20 @@ const BEGIN_FRAME_ARGS = [
 ]
 
 /**
- * Find chrome-headless-shell binary (supports beginFrame, Linux only).
- * Returns the path if found, null otherwise.
+ * Find the `chrome-headless-shell` binary in Playwright's cache
+ * (`~/.cache/ms-playwright`). Returns the path if found, `null` otherwise.
+ *
+ * Linux only — the shell binary doesn't exist on macOS/Windows. When this
+ * returns a path, combine it with `LAUNCH_ARGS` + `BEGIN_FRAME_ARGS` and
+ * pass it to `chromium.launch({ executablePath, args })` to unlock
+ * overcrank's ~2-3x faster `beginFrame` capture backend.
+ *
+ * Install the shell with:
+ * ```bash
+ * npx playwright install chrome-headless-shell
+ * ```
  */
-function findHeadlessShell(): string | null {
+export function findChromeHeadlessShell(): string | null {
   if (process.platform !== 'linux') return null
 
   // Check Playwright's cache
@@ -117,7 +148,7 @@ export async function render(
   }
 
   // Try chrome-headless-shell for beginFrame support (Linux only, ~2x faster)
-  const headlessShell = findHeadlessShell()
+  const headlessShell = findChromeHeadlessShell()
   const launchOptions = headlessShell
     ? {
         executablePath: headlessShell,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.1
+
+### Added
+- **`findChromeHeadlessShell()`** and **`BEGIN_FRAME_ARGS`** are now exported. Consumers that launch Chromium themselves (not via the high-level `render()` API) can now unlock the fast `beginFrame` backend:
+  ```ts
+  import { chromium } from 'playwright'
+  import { LAUNCH_ARGS, BEGIN_FRAME_ARGS, findChromeHeadlessShell } from 'overcrank'
+
+  const shellPath = findChromeHeadlessShell()
+  const browser = await chromium.launch({
+    executablePath: shellPath ?? undefined,
+    args: [...LAUNCH_ARGS, ...(shellPath ? BEGIN_FRAME_ARGS : [])],
+  })
+  ```
+
 ## 0.4.0
 
 ### Added
